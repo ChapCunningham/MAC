@@ -1,495 +1,455 @@
 import streamlit as st
 import traceback
-import sys
-import os
-import gc  # For garbage collection
-
-# Add debug info at the very beginning
-st.write("🐛 **Debug Info:**")
-st.write(f"Python version: {sys.version}")
-st.write(f"Current working directory: {os.getcwd()}")
 
 try:
-    # Test imports one by one
-    st.write("Testing imports...")
-    
+    import os
+    #import streamlit as st
     import pandas as pd
-    st.write("✅ pandas imported")
-    
     import numpy as np
-    st.write("✅ numpy imported")
-    
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
-    st.write("✅ plotly imported")
-    
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
-    st.write("✅ matplotlib imported")
-    
     import base64
     from io import BytesIO
-    st.write("✅ base64 and io imported")
-    
     from scipy import ndimage
     from scipy.interpolate import griddata
-    st.write("✅ scipy imported")
-    
-    # Test MAC_module import separately
-    try:
-        from MAC_module import run_mac
-        st.write("✅ MAC_module imported successfully")
-    except Exception as mac_error:
-        st.error(f"❌ MAC_module import failed: {mac_error}")
-        run_mac = None
-    
+    from MAC_module import run_mac
     import tempfile
-    st.write("✅ tempfile imported")
-    
     import requests
-    st.write("✅ requests imported")
-    
-    # Test pyarrow import
-    try:
-        import pyarrow
-        st.write("✅ pyarrow imported")
-    except Exception as arrow_error:
-        st.warning(f"⚠️ pyarrow not available: {arrow_error}")
-        pyarrow = None
+    import pyarrow
 
-    st.success("✅ All imports successful!")
+    st.success("All imports successful!")
 
 except Exception as e:
-    st.error("❌ Error during imports:")
+    st.error("Error during startup.")
     st.text(traceback.format_exc())
     st.stop()
 
 # === CONFIG ===
-try:
-    st.set_page_config(
-        page_title="MAC Matchup Calculator",
-        page_icon="⚾",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-except Exception as e:
-    st.error(f"❌ Page config error: {e}")
+st.set_page_config(
+    page_title="MAC Matchup Calculator",
+    page_icon="⚾",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Color dictionary for pitch types
 color_dict = {"Fastball": "red", "Breaking": "blue", "Breaking1": "blue", "Breaking2": "cyan", "Offspeed": "green"}
 
-# Data paths
+# Data paths (update these to your actual paths)
+# NCAA_PARQUET = "NCAA_final.parquet"   # https://www.dropbox.com/scl/fi/zozfzz75hamjsx5amp65b/NCAA_final.parquet?rlkey=nalex56psi9rj62fnyo5jhqt5&st=zm9f3dbm&dl=1
+CCBL_PARQUET = "CCBL_current.parquet"
 base_path = "./output"
-try:
-    os.makedirs(base_path, exist_ok=True)
-except Exception as e:
-    st.error(f"❌ Could not create output directory: {e}")
+os.makedirs(base_path, exist_ok=True)
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def download_ncaa_data():
-    """Download NCAA data with better error handling and memory management"""
-    try:
-        st.write("📥 Starting NCAA download...")
-        DROPBOX_NCAA_URL = "https://www.dropbox.com/scl/fi/zozfzz75hamjsx5amp65b/NCAA_final.parquet?rlkey=nalex56psi9rj62fnyo5jhqt5&st=zm9f3dbm&dl=1"
-        
-        # Use streaming download for large files
-        response = requests.get(DROPBOX_NCAA_URL, stream=True, timeout=30)
-        
-        if response.status_code != 200:
-            raise Exception(f"Download failed with status code: {response.status_code}")
-        
-        # Get file size if available
-        content_length = response.headers.get('content-length')
-        if content_length:
-            file_size_mb = int(content_length) / (1024 * 1024)
-            st.write(f"📊 File size: {file_size_mb:.1f} MB")
-        
-        # Stream download to temporary file
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_file:
-            downloaded = 0
-            chunk_size = 8192  # 8KB chunks
-            
-            for chunk in response.iter_content(chunk_size=chunk_size):
-                if chunk:
-                    tmp_file.write(chunk)
-                    downloaded += len(chunk)
-                    
-                    # Update progress every 1MB
-                    if downloaded % (1024 * 1024) == 0:
-                        st.write(f"📥 Downloaded: {downloaded / (1024 * 1024):.1f} MB")
-            
-            tmp_file.flush()
-            tmp_path = tmp_file.name
-        
-        st.write("✅ NCAA download complete")
-        return tmp_path
-        
-    except requests.exceptions.Timeout:
-        raise Exception("Download timed out - try again")
-    except Exception as e:
-        raise Exception(f"Download error: {str(e)}")
 
-@st.cache_data(ttl=3600)
-def load_ncaa_data(file_path):
-    """Load NCAA data with memory optimization and column filtering"""
-    try:
-        st.write("📊 Loading NCAA parquet file...")
-        
-        # Define essential columns only (this will dramatically reduce memory usage)
-        essential_columns = [
-            'Pitcher', 'Batter', 'PitcherThrows', 'BatterSide',
-            'RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 
-            'RelHeight', 'RelSide', 'PlateLocSide', 'PlateLocHeight',
-            'TaggedPitchType', 'PitchCall', 'PlayResult', 'KorBB',
-            'ExitSpeed', 'Angle', 'run_value', 'RunsScored', 'OutsOnPlay'
-        ]
-        
-        # Try engines in order of preference for large files
-        engines_to_try = ['fastparquet', 'pyarrow']  # fastparquet often better for large files
-        
-        for engine in engines_to_try:
-            try:
-                if engine == 'pyarrow' and pyarrow is None:
-                    continue
-                    
-                st.write(f"🔧 Trying {engine} engine with column filtering...")
-                
-                # First, try to get column info without loading data
-                try:
-                    if engine == 'pyarrow' and pyarrow:
-                        import pyarrow.parquet as pq
-                        parquet_file = pq.ParquetFile(file_path)
-                        available_columns = parquet_file.schema.names
-                        st.write(f"📋 Available columns: {len(available_columns)}")
-                        
-                        # Only load columns that exist
-                        columns_to_load = [col for col in essential_columns if col in available_columns]
-                        st.write(f"📋 Loading {len(columns_to_load)} essential columns")
-                        
-                    else:
-                        # For fastparquet, just try the essential columns
-                        columns_to_load = essential_columns
-                        
-                except Exception as col_error:
-                    st.warning(f"Could not check columns: {col_error}")
-                    columns_to_load = None  # Load all columns as fallback
-                
-                # Load the data with column filtering
-                if columns_to_load:
-                    ncaa_df = pd.read_parquet(
-                        file_path, 
-                        engine=engine,
-                        columns=columns_to_load
-                    )
-                else:
-                    # Fallback: load all columns
-                    ncaa_df = pd.read_parquet(file_path, engine=engine)
-                
-                # Show success info
-                memory_usage_mb = ncaa_df.memory_usage(deep=True).sum() / (1024*1024)
-                st.write(f"✅ NCAA data loaded with {engine}:")
-                st.write(f"   📊 Rows: {len(ncaa_df):,}")
-                st.write(f"   📊 Columns: {len(ncaa_df.columns)}")
-                st.write(f"   📊 Memory: {memory_usage_mb:.1f} MB")
-                
-                # Clean up temp file
-                try:
-                    os.unlink(file_path)
-                except:
-                    pass
-                
-                return ncaa_df
-                
-            except Exception as engine_error:
-                error_msg = str(engine_error)
-                st.error(f"❌ {engine} failed: {error_msg}")
-                
-                # Check if it's a memory error
-                if any(keyword in error_msg.lower() for keyword in ['memory', 'ram', 'out of memory', 'allocation']):
-                    st.error("🚨 **MEMORY ERROR DETECTED**")
-                    st.error("This file is too large for the available memory.")
-                    st.error("Possible solutions:")
-                    st.error("1. Use a machine with more RAM")
-                    st.error("2. Process the file in smaller chunks")  
-                    st.error("3. Use a smaller dataset")
-                    break  # Don't try other engines if it's a memory issue
-                    
-                continue
-        
-        raise Exception("All parquet engines failed - file may be too large for available memory")
-        
-    except Exception as e:
-        # Clean up temp file on error
-        try:
-            os.unlink(file_path)
-        except:
-            pass
-        raise e
 
-@st.cache_data(ttl=3600)
-def load_ccbl_data():
-    """Load CCBL data"""
-    CCBL_PARQUET = "CCBL_current.parquet"
-    
-    if not os.path.exists(CCBL_PARQUET):
-        raise FileNotFoundError(f"CCBL file not found: {CCBL_PARQUET}")
-    
-    try:
-        # Try pyarrow first, then fastparquet
-        engines_to_try = ['pyarrow', 'fastparquet'] if pyarrow else ['fastparquet']
-        
-        for engine in engines_to_try:
-            try:
-                ccbl_df = pd.read_parquet(CCBL_PARQUET, engine=engine)
-                st.write(f"✅ CCBL data loaded with {engine}: {len(ccbl_df)} rows")
-                return ccbl_df
-            except Exception as engine_error:
-                st.warning(f"⚠️ CCBL {engine} failed: {engine_error}")
-                continue
-        
-        raise Exception("All CCBL parquet engines failed")
-        
-    except Exception as e:
-        raise Exception(f"CCBL load error: {e}")
-
-@st.cache_data(ttl=3600)
+@st.cache_data
 def load_combined_data():
-    """Load and combine data with better memory management"""
     try:
-        # Force garbage collection before starting
-        gc.collect()
-        
-        # Show memory before starting
-        try:
-            import psutil
-            process = psutil.Process()
-            memory_before_mb = process.memory_info().rss / (1024 * 1024)
-            st.write(f"💾 Memory before loading: {memory_before_mb:.1f} MB")
-        except:
-            pass
-        
-        # Add option for different loading strategies
-        loading_strategy = st.radio(
-            "Choose loading strategy:",
-            ["Full Load (Fast but uses more memory)", "Essential Columns Only (Slower but safer)"],
-            index=1  # Default to safer option
-        )
-        
-        if loading_strategy == "Essential Columns Only (Slower but safer)":
-            st.info("🛡️ Using memory-safe loading with essential columns only")
-        
-        # Step 1: Download NCAA data
-        ncaa_path = download_ncaa_data()
-        
-        # Check file size before loading
-        file_size_mb = os.path.getsize(ncaa_path) / (1024 * 1024)
-        st.write(f"📁 File on disk: {file_size_mb:.1f} MB")
-        
-        # Warning for very large files
-        if file_size_mb > 800:
-            st.error("🚨 **VERY LARGE FILE DETECTED**")
-            st.error(f"File size: {file_size_mb:.1f} MB")
-            st.error("This file may be too large for available memory.")
-            
-            # Offer alternative
-            if st.button("❌ Cancel and skip NCAA data (use CCBL only)"):
-                st.warning("Skipping NCAA data - loading CCBL only")
-                try:
-                    os.unlink(ncaa_path)
-                except:
-                    pass
-                return load_ccbl_data()
-            
-            if not st.button("⚠️ Continue anyway (may crash)"):
-                st.stop()
-        
-        # Step 2: Load NCAA data with strategy
-        if loading_strategy == "Essential Columns Only (Slower but safer)":
-            ncaa_df = load_ncaa_data(ncaa_path)
-        else:
-            # Try full load
-            ncaa_df = load_ncaa_data_full(ncaa_path)
-        
-        # Step 3: Load CCBL data
-        ccbl_df = load_ccbl_data()
-        
-        # Step 4: Combine data
-        st.write("🔄 Combining datasets...")
-        combined_df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
-        
-        # Clean up individual dataframes to free memory
-        del ncaa_df, ccbl_df
-        gc.collect()
-        
-        # Show final stats
-        memory_usage_mb = combined_df.memory_usage(deep=True).sum() / (1024*1024)
-        st.write(f"✅ **FINAL COMBINED DATA:**")
-        st.write(f"   📊 Total rows: {len(combined_df):,}")
-        st.write(f"   📊 Total columns: {len(combined_df.columns)}")
-        st.write(f"   📊 Memory usage: {memory_usage_mb:.1f} MB")
-        
-        # Show memory after
-        try:
-            memory_after_mb = process.memory_info().rss / (1024 * 1024)
-            st.write(f"💾 Memory after loading: {memory_after_mb:.1f} MB")
-            st.write(f"💾 Memory increase: {memory_after_mb - memory_before_mb:.1f} MB")
-        except:
-            pass
-        
-        return combined_df
-        
+        # Download the NCAA file from Dropbox
+        DROPBOX_NCAA_URL = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=k5cuysoi&dl=1"
+        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
+            response = requests.get(DROPBOX_NCAA_URL)
+            if response.status_code != 200:
+                st.error("Failed to download NCAA data from Dropbox.")
+                return pd.DataFrame()
+            tmp_file.write(response.content)
+            tmp_file.flush()
+            ncaa_df = pd.read_parquet(tmp_file.name, engine = "pyarrow")
+
+        ccbl_df = pd.read_parquet(CCBL_PARQUET, engine = "pyarrow")
+        return pd.concat([ncaa_df, ccbl_df], ignore_index=True)
     except Exception as e:
-        st.error(f"❌ Data load error: {e}")
-        st.text(traceback.format_exc())
-        # Force cleanup on error
-        gc.collect()
+        st.error(f"Data load error: {e}")
         return pd.DataFrame()
 
-def load_ncaa_data_full(file_path):
-    """Full load version (for comparison)"""
-    try:
-        st.write("🔧 Attempting full data load...")
-        ncaa_df = pd.read_parquet(file_path, engine='fastparquet')
-        
-        memory_usage_mb = ncaa_df.memory_usage(deep=True).sum() / (1024*1024)
-        st.write(f"✅ Full load successful: {len(ncaa_df):,} rows, {memory_usage_mb:.1f} MB")
-        
-        # Clean up temp file
-        try:
-            os.unlink(file_path)
-        except:
-            pass
-        
-        return ncaa_df
-        
-    except Exception as e:
-        st.error(f"Full load failed: {e}")
-        # Fallback to essential columns
-        st.write("🔄 Falling back to essential columns...")
-        return load_ncaa_data(file_path)
 
-# Simplified functions (removing some to save space)
-def create_simple_scatter_plot(summary_df, pitcher_name):
-    """Simplified scatter plot"""
+def compute_heatmap_stats(df, metric_col, min_samples=3):
+    """Compute heatmap statistics for zone visualization"""
+    valid = df[["PlateLocSide", "PlateLocHeight", metric_col]].dropna()
+    if len(valid) < min_samples:
+        return None, None, None
+
+    x_range = np.linspace(-2, 2, 100)
+    y_range = np.linspace(0.5, 4.5, 100)
+    X, Y = np.meshgrid(x_range, y_range)
+
     try:
-        fig = go.Figure()
-        
-        fig.add_trace(go.Scatter(
-            x=summary_df["Batter"],
-            y=summary_df["RV/100"],
-            mode="markers",
-            marker=dict(size=15, color="blue"),
-            text=summary_df["Batter"],
-            hovertemplate="<b>%{text}</b><br>RV/100: %{y}<extra></extra>"
-        ))
-        
-        fig.update_layout(
-            title=f"RV/100 Analysis: {pitcher_name}",
-            xaxis_title="Batter",
-            yaxis_title="RV/100",
-            height=500
-        )
-        
-        return fig
+        points = valid[["PlateLocSide", "PlateLocHeight"]].values
+        values = valid[metric_col].values
+        Z = griddata(points, values, (X, Y), method='linear', fill_value=0)
+
+        if len(valid) < 10:
+            sigma = 0.5
+        elif len(valid) < 25:
+            sigma = 1.0
+        else:
+            sigma = 1.5
+
+        Z_smooth = ndimage.gaussian_filter(Z, sigma=sigma, mode='constant', cval=0)
+
+        mask = np.zeros_like(Z_smooth)
+        for i in range(len(x_range)):
+            for j in range(len(y_range)):
+                dist = np.sqrt((points[:, 0] - x_range[i])**2 + (points[:, 1] - y_range[j])**2)
+                if np.min(dist) < 0.8:
+                    mask[j, i] = 1
+
+        Z_smooth *= mask
+        Z_smooth[Z_smooth < 0.01] = 0
+        return x_range, y_range, Z_smooth
     except Exception as e:
-        st.error(f"Plot error: {e}")
-        return None
+        st.error(f"Heatmap error: {e}")
+        return None, None, None
+
+def generate_mpl_heatmap_grid(df, selected_hitter):
+    """Generate matplotlib heatmap grid"""
+    fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+    metrics = [("WhiffFlag", "Whiff Rate"), ("HardHitFlag", "Hard Hit Rate"), ("wOBA_result", "wOBA")]
+    pitch_groups = ["Fastball", "Breaking", "Offspeed"]
+
+    for i, (metric, title) in enumerate(metrics):
+        for j, group in enumerate(pitch_groups):
+            ax = axes[i, j]
+            subset = df[df["PitchGroup"] == group].copy()
+
+            if len(subset) == 0:
+                ax.text(0, 2.75, "No Data", ha='center', va='center', fontsize=12)
+            else:
+                x_range, y_range, z = compute_heatmap_stats(subset, metric)
+
+                if z is not None and np.any(z > 0):
+                    X, Y = np.meshgrid(x_range, y_range)
+
+                    if metric == "wOBA_result":
+                        actual_max = np.max(z[z > 0])
+                        vmax = min(actual_max * 1.1, 1.8)
+                        vmin = 0
+                        cmap = "RdYlBu_r"
+                        levels = np.linspace(vmin, vmax, 20)
+                    else:
+                        vmin, vmax = 0, 1
+                        cmap = "RdYlBu_r"
+                        levels = np.linspace(0, 1, 20)
+
+                    cs = ax.contourf(X, Y, z, levels=levels, cmap=cmap,
+                                     vmin=vmin, vmax=vmax, alpha=0.8, extend='both')
+                    ax.contour(X, Y, z, levels=levels[::4], colors='white',
+                               linewidths=0.5, alpha=0.3)
+
+                    if j == 2:
+                        cbar = fig.colorbar(cs, ax=ax, shrink=0.6)
+                        cbar.set_label(title, rotation=270, labelpad=15)
+                else:
+                    valid = subset[["PlateLocSide", "PlateLocHeight", metric]].dropna()
+                    if not valid.empty:
+                        if metric in ["WhiffFlag", "HardHitFlag"]:
+                            colors = ['lightblue' if x == 0 else 'red' for x in valid[metric]]
+                            ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
+                                       c=colors, s=40, alpha=0.7, edgecolors='black')
+                        else:
+                            vmin, vmax = 0, 1 if metric != "wOBA_result" else min(valid[metric].max() * 1.1, 1.8)
+                            sc = ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
+                                            c=valid[metric], cmap="RdYlBu_r", s=60,
+                                            edgecolors="black", alpha=0.8,
+                                            vmin=0, vmax=vmax)
+                            if j == 2:
+                                fig.colorbar(sc, ax=ax, shrink=0.6)
+
+            ax.add_patch(Rectangle((-0.83, 1.5), 1.66, 1.8775, linewidth=2.5,
+                                   edgecolor='black', facecolor='none'))
+
+            ax.set_xlim([-1.5, 1.5])
+            ax.set_ylim([1.0, 4.0])
+            ax.set_aspect('equal')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_facecolor("#f8f9fa")
+
+            if j == 0:
+                ax.set_ylabel(title, fontsize=12, fontweight='bold')
+            if i == 2:
+                ax.set_xlabel(group, fontsize=12, fontweight='bold')
+
+    fig.suptitle(f"Zone-Level Heat Maps for {selected_hitter}", fontsize=16, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    encoded = base64.b64encode(buf.read()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
+def create_scatter_plot(summary_df, breakdown_df, pitcher_name):
+    """Create the main RV/100 scatter plot"""
+    fig = make_subplots(rows=1, cols=1, specs=[[{"type": "scatter"}]])
+
+    # Add summary points with full hover info
+    for _, row in summary_df.iterrows():
+        fig.add_trace(go.Scatter(
+            x=[row["Batter"]],
+            y=[row["RV/100"]],
+            mode="markers",
+            marker=dict(size=20, color="black"),
+            hovertemplate=(
+                f"<b>{row['Batter']}</b><br>"
+                f"RV/100: {row['RV/100']}<br>"
+                f"wOBA: {row['wOBA']}<br>"
+                f"AVG: {row['AVG']}<br>"
+                f"Whiff%: {row['Whiff%']}<br>"
+                f"SwStr%: {row['SwStr%']}<br>"
+                f"HH%: {row['HH%']}<br>"
+                f"GB%: {row['GB%']}<br>"
+                f"ExitVelo: {row['ExitVelo']}<br>"
+                f"Launch: {row['Launch']}<br>"
+                f"Pitches: {row['Pitches']}<br>"
+                f"InPlay: {row['InPlay']}<extra></extra>"
+            ),
+            showlegend=False
+        ))
+
+    # Add breakdown points with full hover info
+    for _, row in breakdown_df.iterrows():
+        fig.add_trace(go.Scatter(
+            x=[row["Batter"]],
+            y=[row["RV/100"]],
+            mode="markers+text",
+            marker=dict(size=14, color=color_dict.get(row["PitchGroup"], "gray")),
+            text=[f"{int(row['Pitches'])}P"],
+            textposition="top center",
+            textfont=dict(size=10, color="black"),
+            hovertemplate=(
+                f"<b>{row['Batter']}</b><br>"
+                f"PitchGroup: {row['PitchGroup']}<br>"
+                f"RV/100: {row['RV/100']}<br>"
+                f"wOBA: {row['wOBA']}<br>"
+                f"AVG: {row['AVG']}<br>"
+                f"Whiff%: {row['Whiff%']}<br>"
+                f"SwStr%: {row['SwStr%']}<br>"
+                f"HH%: {row['HH%']}<br>"
+                f"GB%: {row['GB%']}<br>"
+                f"ExitVelo: {row['ExitVelo']}<br>"
+                f"Launch: {row['Launch']}<br>"
+                f"Pitches: {row['Pitches']}<br>"
+                f"InPlay: {row['InPlay']}<extra></extra>"
+            ),
+            showlegend=False
+        ))
+
+    fig.update_layout(
+        height=700,
+        title=f"Expected Matchup RV/100 + Hitter Summary: {pitcher_name}<br><sub>Black dots = weighted performance | Red/Blue/Green = Fastball/Breaking/Offspeed</sub>",
+        yaxis_title="RV/100",
+        template="simple_white",
+        xaxis=dict(
+            tickmode="array",
+            tickvals=list(range(len(summary_df))),
+            ticktext=summary_df["Batter"].tolist(),
+            tickangle=45
+        )
+    )
+
+    # Add annotations for better/worse indicators
+    fig.add_annotation(
+        xref="paper", yref="y",
+        x=1.02, y=summary_df["RV/100"].max() + 1 if not summary_df.empty else 5,
+        text="↑ Better for Hitters",
+        showarrow=False,
+        font=dict(size=20, color="green"),
+        align="left"
+    )
+
+    fig.add_annotation(
+        xref="paper", yref="y",
+        x=1.02, y=summary_df["RV/100"].min() - 1 if not summary_df.empty else -5,
+        text="↓ Worse for Hitters",
+        showarrow=False,
+        font=dict(size=20, color="red"),
+        align="left"
+    )
+
+    return fig
+
+def create_movement_plot(movement_df):
+    """Create pitch movement scatter plot"""
+    movement_df_filtered = movement_df[(movement_df["HorzBreak"].between(-50, 50)) & 
+                                      (movement_df["InducedVertBreak"].between(-50, 50))]
+    
+    movement_fig = go.Figure()
+    for pitch_type, color in color_dict.items():
+        pitch_df = movement_df_filtered[movement_df_filtered["PitchGroup"] == pitch_type]
+        if not pitch_df.empty:
+            movement_fig.add_trace(go.Scatter(
+                x=pitch_df["HorzBreak"],
+                y=pitch_df["InducedVertBreak"],
+                mode="markers",
+                marker=dict(color=color, size=10),
+                name=pitch_type,
+                customdata=pitch_df[["Batter", "RelSpeed", "SpinRate"]],
+                hovertemplate="<b>%{customdata[0]}</b><br>"
+                              "HB: %{x}<br>"
+                              "IVB: %{y}<br>"
+                              "RelSpeed: %{customdata[1]} mph<br>"
+                              "SpinRate: %{customdata[2]}<extra></extra>"
+            ))
+    
+    movement_fig.update_layout(
+        title="Pitch Movement (HorzBreak vs. InducedVertBreak)",
+        xaxis=dict(title="Horizontal Break", range=[-30, 30]),
+        yaxis=dict(title="Induced Vertical Break", range=[-30, 30], scaleanchor="x", scaleratio=1),
+        template="simple_white",
+        height=600,
+        width=1000
+    )
+    
+    return movement_fig
 
 # === MAIN APP ===
 def main():
     st.title("⚾ MAC Matchup Calculator")
     st.markdown("---")
 
-    # Add memory usage info
-    try:
-        import psutil
-        process = psutil.Process()
-        memory_mb = process.memory_info().rss / (1024 * 1024)
-        st.write(f"💾 Current memory usage: {memory_mb:.1f} MB")
-    except:
-        pass
-
-    # Load data with progress tracking
     data_load_error = None
-    df_all = pd.DataFrame()
+    df_all = pd.DataFrame()  # ensure df_all is defined even if error occurs
     
-    # Add a button to control data loading
-    if st.button("📥 Load Data", type="primary"):
-        with st.spinner("Loading data (this may take a few minutes)..."):
-            try:
+    with st.spinner("Loading data..."):
+        try:
+            if not os.path.exists(CCBL_PARQUET):
+                data_load_error = f"Missing file: {CCBL_PARQUET}"
+            else:
                 df_all = load_combined_data()
                 if df_all.empty:
-                    data_load_error = "Data load returned empty DataFrame"
-                else:
-                    st.session_state['data_loaded'] = True
-                    st.session_state['df_all'] = df_all
-            except Exception as e:
-                data_load_error = f"Data load failed: {str(e)}"
-                st.text(traceback.format_exc())
-    
-    # Check if data is already loaded
-    if 'data_loaded' in st.session_state and 'df_all' in st.session_state:
-        df_all = st.session_state['df_all']
-        st.success(f"✅ Data loaded: {len(df_all)} rows")
-    elif not data_load_error:
-        st.info("👆 Click 'Load Data' to start")
-        return
+                    data_load_error = "Data load returned an empty DataFrame."
+        except Exception as e:
+            data_load_error = f"Exception during data load:\n{traceback.format_exc()}"
     
     if data_load_error:
         st.error(data_load_error)
         return
+    else:
+        st.success(f"✅ Loaded {len(df_all)} rows.")
 
-    # Check if we have MAC module
-    if run_mac is None:
-        st.error("❌ MAC_module not available")
-        return
 
-    # Rest of the app (simplified)
+
+    
+    
+    # Sidebar for inputs
     st.sidebar.header("Select Matchup")
     
     # Pitcher selection
-    if len(df_all) > 0:
-        pitcher_options = sorted(df_all["Pitcher"].dropna().unique())
-        selected_pitcher = st.sidebar.selectbox(
-            "Select Pitcher:",
-            options=pitcher_options[:100],  # Limit to first 100 to avoid memory issues
-            index=0 if pitcher_options else None
-        )
+    pitcher_options = sorted(df_all["Pitcher"].dropna().unique())
+    selected_pitcher = st.sidebar.selectbox(
+        "Select Pitcher:",
+        options=pitcher_options,
+        index=0 if pitcher_options else None
+    )
+    
+    # Hitter selection
+    hitter_options = sorted(df_all["Batter"].dropna().unique())
+    selected_hitters = st.sidebar.multiselect(
+        "Select Hitters:",
+        options=hitter_options,
+        help="Select hitters in lineup order"
+    )
+    
+    # Run analysis button
+    run_analysis = st.sidebar.button("🚀 Run Matchup Analysis", type="primary")
+    
+    if run_analysis and selected_pitcher and selected_hitters:
         
-        # Hitter selection  
-        hitter_options = sorted(df_all["Batter"].dropna().unique())
-        selected_hitters = st.sidebar.multiselect(
-            "Select Hitters:",
-            options=hitter_options[:100],  # Limit to first 100
-            help="Select hitters in lineup order"
-        )
+        with st.spinner("Running MAC analysis..."):
+            try:
+                # Run the MAC module
+                run_mac(selected_pitcher, selected_hitters, df_all, base_path)
+                
+                # Load results
+                last_first = selected_pitcher.replace(", ", "_")
+                summary_path = os.path.join(base_path, f"{last_first}_summary.csv")
+                breakdown_path = os.path.join(base_path, f"{last_first}_group_breakdown.csv")
+                movement_path = os.path.join(base_path, f"{last_first}_pitch_level_filtered.csv")
+                
+                summary_df = pd.read_csv(summary_path)
+                breakdown_df = pd.read_csv(breakdown_path)
+                movement_df = pd.read_csv(movement_path)
+                
+                # Filter for selected hitters and maintain order
+                summary_df = summary_df[summary_df["Batter"].isin(selected_hitters)].copy()
+                breakdown_df = breakdown_df[breakdown_df["Batter"].isin(selected_hitters)].copy()
+                movement_df = movement_df[movement_df["Batter"].isin(selected_hitters)].copy()
+                
+                for df in [summary_df, breakdown_df, movement_df]:
+                    df["Batter"] = pd.Categorical(df["Batter"], categories=selected_hitters, ordered=True)
+                    df.sort_values("Batter", inplace=True)
+                
+                st.success(f"✅ Analysis complete for {selected_pitcher} vs {len(selected_hitters)} hitters!")
+                
+                # Display results
+                st.markdown("## 📊 RV/100 Performance Analysis")
+                
+                # Main scatter plot
+                scatter_fig = create_scatter_plot(summary_df, breakdown_df, selected_pitcher)
+                st.plotly_chart(scatter_fig, use_container_width=True)
+                
+                # Statistics table
+                st.markdown("## 📋 Detailed Statistics")
+                st.dataframe(summary_df, use_container_width=True)
+                
+                # Heatmap section
+                st.markdown("## 🎯 Zone Analysis Heatmaps")
+                
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    selected_hitter_heatmap = st.selectbox(
+                        "Select hitter for zone heatmap:",
+                        options=selected_hitters
+                    )
+                
+                if selected_hitter_heatmap:
+                    # Filter movement data for selected hitter
+                    hitter_movement_df = movement_df[movement_df["Batter"] == selected_hitter_heatmap].copy()
+                    
+                    # Add required flags
+                    hitter_movement_df["WhiffFlag"] = (hitter_movement_df["PitchCall"] == "StrikeSwinging").astype(int)
+                    hitter_movement_df["HardHitFlag"] = ((hitter_movement_df["ExitSpeed"] >= 95) & 
+                                                        hitter_movement_df["ExitSpeed"].notna()).astype(int)
+                    
+                    # Generate and display heatmap
+                    encoded_img = generate_mpl_heatmap_grid(hitter_movement_df, selected_hitter_heatmap)
+                    st.markdown(f"<img src='{encoded_img}' style='width: 100%; max-width: 1200px;'>", 
+                               unsafe_allow_html=True)
+                
+                # Movement plot
+                st.markdown("## 🌪️ Pitch Movement Analysis")
+                movement_fig = create_movement_plot(movement_df)
+                st.plotly_chart(movement_fig, use_container_width=True)
+                
+
+            except Exception as e:
+                st.error("❌ Error running analysis.")
+                st.text(traceback.format_exc())
+                return
+
+    elif run_analysis:
+        st.warning("Please select both a pitcher and at least one hitter.")
+    
+    # Instructions
+    if not run_analysis:
+        st.markdown("""
+        ## How to Use This App
         
-        # Run analysis button
-        if st.sidebar.button("🚀 Run Analysis", type="primary"):
-            if selected_pitcher and selected_hitters:
-                with st.spinner("Running analysis..."):
-                    try:
-                        run_mac(selected_pitcher, selected_hitters, df_all, base_path)
-                        st.success("✅ Analysis complete!")
-                        
-                        # Load and display simple results
-                        last_first = selected_pitcher.replace(", ", "_")
-                        summary_path = os.path.join(base_path, f"{last_first}_summary.csv")
-                        
-                        if os.path.exists(summary_path):
-                            summary_df = pd.read_csv(summary_path)
-                            st.dataframe(summary_df)
-                            
-                            # Simple plot
-                            fig = create_simple_scatter_plot(summary_df, selected_pitcher)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
-                        
-                    except Exception as e:
-                        st.error(f"Analysis error: {e}")
-                        st.text(traceback.format_exc())
-            else:
-                st.warning("Please select pitcher and hitters")
+        1. **Select a Pitcher** from the dropdown in the sidebar
+        2. **Select Hitters** you want to analyze (multiple selection allowed)
+        3. **Click "Run Matchup Analysis"** to generate the report
+        
+        The analysis will show:
+        - **RV/100 Performance**: Expected run value per 100 pitches
+        - **Detailed Statistics**: Complete breakdown by pitch type
+        - **Zone Heatmaps**: Visual representation of performance by location
+        - **Movement Charts**: Pitch movement patterns
+        """)
 
 if __name__ == "__main__":
     main()
