@@ -35,7 +35,7 @@ class DatabaseManager:
             self.create_database_from_dropbox()
     
     def create_database_from_dropbox(self):
-        """Create database from both NCAA (Dropbox) and CCBL (GitHub) data"""
+        """Create database from both NCAA and CCBL data (both from Dropbox)"""
         try:
             progress_bar = st.progress(0)
             st.info("📂 Downloading NCAA data from Dropbox...")
@@ -51,20 +51,18 @@ class DatabaseManager:
             progress_bar.progress(50)
             
             # Download CCBL data (if available)
-            st.info("📂 Downloading CCBL data from GitHub...")
+            st.info("📂 Downloading CCBL data from Dropbox...")
             try:
-                ccbl_url = "https://github.com/yourusername/yourrepo/raw/main/CCBL_current.parquet"  # UPDATE THIS URL
+                ccbl_url = "https://www.dropbox.com/scl/fi/YOUR_FILE_ID/CCBL_current.parquet?rlkey=YOUR_RLKEY&st=YOUR_ST&dl=1"  # UPDATE THIS URL
                 ccbl_response = requests.get(ccbl_url, timeout=180)
-                if ccbl_response.status_code == 200:
-                    ccbl_df = pd.read_parquet(BytesIO(ccbl_response.content))
-                    st.success(f"✅ CCBL data loaded: {len(ccbl_df):,} rows")
-                    
-                    # Combine datasets
-                    df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
-                    st.success(f"✅ Combined dataset: {len(df):,} rows")
-                else:
-                    st.warning("⚠️ CCBL data not found, using NCAA only")
-                    df = ncaa_df
+                ccbl_response.raise_for_status()  # This will raise an exception for HTTP errors
+                
+                ccbl_df = pd.read_parquet(BytesIO(ccbl_response.content))
+                st.success(f"✅ CCBL data loaded: {len(ccbl_df):,} rows")
+                # Combine datasets
+                df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
+                st.success(f"✅ Combined dataset: {len(df):,} rows")
+                
             except Exception as e:
                 st.warning(f"⚠️ Could not load CCBL data: {e}")
                 st.info("Using NCAA data only")
