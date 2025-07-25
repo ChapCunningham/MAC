@@ -1,82 +1,161 @@
 import streamlit as st
 import traceback
+import sys
+import os
+
+# Add debug info at the very beginning
+st.write("🐛 **Debug Info:**")
+st.write(f"Python version: {sys.version}")
+st.write(f"Current working directory: {os.getcwd()}")
+st.write(f"Files in current directory: {os.listdir('.')}")
 
 try:
-    import os
-    #import streamlit as st
+    # Test imports one by one to isolate the problem
+    st.write("Testing imports...")
+    
     import pandas as pd
+    st.write("✅ pandas imported")
+    
     import numpy as np
+    st.write("✅ numpy imported")
+    
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
+    st.write("✅ plotly imported")
+    
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
+    st.write("✅ matplotlib imported")
+    
     import base64
     from io import BytesIO
+    st.write("✅ base64 and io imported")
+    
     from scipy import ndimage
     from scipy.interpolate import griddata
-    from MAC_module import run_mac
+    st.write("✅ scipy imported")
+    
+    # Test MAC_module import separately - this is likely the problem
+    try:
+        from MAC_module import run_mac
+        st.write("✅ MAC_module imported successfully")
+    except Exception as mac_error:
+        st.error(f"❌ MAC_module import failed: {mac_error}")
+        st.text(traceback.format_exc())
+        # Continue without MAC_module for now
+        run_mac = None
+    
     import tempfile
+    st.write("✅ tempfile imported")
+    
     import requests
-    import pyarrow
+    st.write("✅ requests imported")
+    
+    # Test pyarrow import - another potential issue
+    try:
+        import pyarrow
+        st.write("✅ pyarrow imported")
+    except Exception as arrow_error:
+        st.error(f"❌ pyarrow import failed: {arrow_error}")
+        pyarrow = None
 
-    st.success("All imports successful!")
+    st.success("✅ All basic imports successful!")
 
 except Exception as e:
-    st.error("Error during startup.")
+    st.error("❌ Error during imports:")
     st.text(traceback.format_exc())
     st.stop()
 
 # === CONFIG ===
-st.set_page_config(
-    page_title="MAC Matchup Calculator",
-    page_icon="⚾",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+try:
+    st.set_page_config(
+        page_title="MAC Matchup Calculator",
+        page_icon="⚾",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    st.write("✅ Page config set successfully")
+except Exception as e:
+    st.error(f"❌ Page config error: {e}")
 
 # Color dictionary for pitch types
 color_dict = {"Fastball": "red", "Breaking": "blue", "Breaking1": "blue", "Breaking2": "cyan", "Offspeed": "green"}
 
-# Data paths (update these to your actual paths)
-# NCAA_PARQUET = "NCAA_final.parquet"   # https://www.dropbox.com/scl/fi/zozfzz75hamjsx5amp65b/NCAA_final.parquet?rlkey=nalex56psi9rj62fnyo5jhqt5&st=zm9f3dbm&dl=1
+# Data paths - Add existence checks
 CCBL_PARQUET = "CCBL_current.parquet"
 base_path = "./output"
-os.makedirs(base_path, exist_ok=True)
 
+# Check if files exist
+st.write("🔍 **File Checks:**")
+st.write(f"CCBL_PARQUET exists: {os.path.exists(CCBL_PARQUET)}")
+if not os.path.exists(CCBL_PARQUET):
+    st.warning(f"⚠️ Missing file: {CCBL_PARQUET}")
 
+try:
+    os.makedirs(base_path, exist_ok=True)
+    st.write(f"✅ Output directory created: {base_path}")
+except Exception as e:
+    st.error(f"❌ Could not create output directory: {e}")
 
 @st.cache_data
 def load_combined_data():
     try:
+        st.write("🔄 Starting data load...")
+        
         # Download the NCAA file from Dropbox
         DROPBOX_NCAA_URL = "https://www.dropbox.com/scl/fi/zozfzz75hamjsx5amp65b/NCAA_final.parquet?rlkey=nalex56psi9rj62fnyo5jhqt5&st=zm9f3dbm&dl=1"
+        
         with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
+            st.write("📥 Downloading NCAA data...")
             response = requests.get(DROPBOX_NCAA_URL)
             if response.status_code != 200:
-                st.error("Failed to download NCAA data from Dropbox.")
+                st.error(f"Failed to download NCAA data. Status code: {response.status_code}")
                 return pd.DataFrame()
+            
             tmp_file.write(response.content)
             tmp_file.flush()
-            ncaa_df = pd.read_parquet(tmp_file.name, engine = "pyarrow")
+            st.write("✅ NCAA data downloaded")
+            
+            # Test if pyarrow is available
+            if pyarrow is not None:
+                ncaa_df = pd.read_parquet(tmp_file.name, engine="pyarrow")
+            else:
+                st.warning("Using fastparquet engine instead of pyarrow")
+                ncaa_df = pd.read_parquet(tmp_file.name, engine="fastparquet")
+            
+            st.write(f"✅ NCAA data loaded: {len(ncaa_df)} rows")
 
-        ccbl_df = pd.read_parquet(CCBL_PARQUET, engine = "pyarrow")
-        return pd.concat([ncaa_df, ccbl_df], ignore_index=True)
+        # Load CCBL data
+        if os.path.exists(CCBL_PARQUET):
+            if pyarrow is not None:
+                ccbl_df = pd.read_parquet(CCBL_PARQUET, engine="pyarrow")
+            else:
+                ccbl_df = pd.read_parquet(CCBL_PARQUET, engine="fastparquet")
+            st.write(f"✅ CCBL data loaded: {len(ccbl_df)} rows")
+        else:
+            st.error(f"CCBL file not found: {CCBL_PARQUET}")
+            return pd.DataFrame()
+        
+        combined_df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
+        st.write(f"✅ Combined data: {len(combined_df)} rows")
+        return combined_df
+        
     except Exception as e:
-        st.error(f"Data load error: {e}")
+        st.error(f"❌ Data load error: {e}")
+        st.text(traceback.format_exc())
         return pd.DataFrame()
-
 
 def compute_heatmap_stats(df, metric_col, min_samples=3):
     """Compute heatmap statistics for zone visualization"""
-    valid = df[["PlateLocSide", "PlateLocHeight", metric_col]].dropna()
-    if len(valid) < min_samples:
-        return None, None, None
-
-    x_range = np.linspace(-2, 2, 100)
-    y_range = np.linspace(0.5, 4.5, 100)
-    X, Y = np.meshgrid(x_range, y_range)
-
     try:
+        valid = df[["PlateLocSide", "PlateLocHeight", metric_col]].dropna()
+        if len(valid) < min_samples:
+            return None, None, None
+
+        x_range = np.linspace(-2, 2, 100)
+        y_range = np.linspace(0.5, 4.5, 100)
+        X, Y = np.meshgrid(x_range, y_range)
+
         points = valid[["PlateLocSide", "PlateLocHeight"]].values
         values = valid[metric_col].values
         Z = griddata(points, values, (X, Y), method='linear', fill_value=0)
@@ -101,211 +180,226 @@ def compute_heatmap_stats(df, metric_col, min_samples=3):
         Z_smooth[Z_smooth < 0.01] = 0
         return x_range, y_range, Z_smooth
     except Exception as e:
-        st.error(f"Heatmap error: {e}")
+        st.error(f"Heatmap computation error: {e}")
         return None, None, None
 
 def generate_mpl_heatmap_grid(df, selected_hitter):
     """Generate matplotlib heatmap grid"""
-    fig, axes = plt.subplots(3, 3, figsize=(15, 12))
-    metrics = [("WhiffFlag", "Whiff Rate"), ("HardHitFlag", "Hard Hit Rate"), ("wOBA_result", "wOBA")]
-    pitch_groups = ["Fastball", "Breaking", "Offspeed"]
+    try:
+        fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+        metrics = [("WhiffFlag", "Whiff Rate"), ("HardHitFlag", "Hard Hit Rate"), ("wOBA_result", "wOBA")]
+        pitch_groups = ["Fastball", "Breaking", "Offspeed"]
 
-    for i, (metric, title) in enumerate(metrics):
-        for j, group in enumerate(pitch_groups):
-            ax = axes[i, j]
-            subset = df[df["PitchGroup"] == group].copy()
+        for i, (metric, title) in enumerate(metrics):
+            for j, group in enumerate(pitch_groups):
+                ax = axes[i, j]
+                subset = df[df["PitchGroup"] == group].copy()
 
-            if len(subset) == 0:
-                ax.text(0, 2.75, "No Data", ha='center', va='center', fontsize=12)
-            else:
-                x_range, y_range, z = compute_heatmap_stats(subset, metric)
-
-                if z is not None and np.any(z > 0):
-                    X, Y = np.meshgrid(x_range, y_range)
-
-                    if metric == "wOBA_result":
-                        actual_max = np.max(z[z > 0])
-                        vmax = min(actual_max * 1.1, 1.8)
-                        vmin = 0
-                        cmap = "RdYlBu_r"
-                        levels = np.linspace(vmin, vmax, 20)
-                    else:
-                        vmin, vmax = 0, 1
-                        cmap = "RdYlBu_r"
-                        levels = np.linspace(0, 1, 20)
-
-                    cs = ax.contourf(X, Y, z, levels=levels, cmap=cmap,
-                                     vmin=vmin, vmax=vmax, alpha=0.8, extend='both')
-                    ax.contour(X, Y, z, levels=levels[::4], colors='white',
-                               linewidths=0.5, alpha=0.3)
-
-                    if j == 2:
-                        cbar = fig.colorbar(cs, ax=ax, shrink=0.6)
-                        cbar.set_label(title, rotation=270, labelpad=15)
+                if len(subset) == 0:
+                    ax.text(0, 2.75, "No Data", ha='center', va='center', fontsize=12)
                 else:
-                    valid = subset[["PlateLocSide", "PlateLocHeight", metric]].dropna()
-                    if not valid.empty:
-                        if metric in ["WhiffFlag", "HardHitFlag"]:
-                            colors = ['lightblue' if x == 0 else 'red' for x in valid[metric]]
-                            ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
-                                       c=colors, s=40, alpha=0.7, edgecolors='black')
+                    x_range, y_range, z = compute_heatmap_stats(subset, metric)
+
+                    if z is not None and np.any(z > 0):
+                        X, Y = np.meshgrid(x_range, y_range)
+
+                        if metric == "wOBA_result":
+                            actual_max = np.max(z[z > 0])
+                            vmax = min(actual_max * 1.1, 1.8)
+                            vmin = 0
+                            cmap = "RdYlBu_r"
+                            levels = np.linspace(vmin, vmax, 20)
                         else:
-                            vmin, vmax = 0, 1 if metric != "wOBA_result" else min(valid[metric].max() * 1.1, 1.8)
-                            sc = ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
-                                            c=valid[metric], cmap="RdYlBu_r", s=60,
-                                            edgecolors="black", alpha=0.8,
-                                            vmin=0, vmax=vmax)
-                            if j == 2:
-                                fig.colorbar(sc, ax=ax, shrink=0.6)
+                            vmin, vmax = 0, 1
+                            cmap = "RdYlBu_r"
+                            levels = np.linspace(0, 1, 20)
 
-            ax.add_patch(Rectangle((-0.83, 1.5), 1.66, 1.8775, linewidth=2.5,
-                                   edgecolor='black', facecolor='none'))
+                        cs = ax.contourf(X, Y, z, levels=levels, cmap=cmap,
+                                         vmin=vmin, vmax=vmax, alpha=0.8, extend='both')
+                        ax.contour(X, Y, z, levels=levels[::4], colors='white',
+                                   linewidths=0.5, alpha=0.3)
 
-            ax.set_xlim([-1.5, 1.5])
-            ax.set_ylim([1.0, 4.0])
-            ax.set_aspect('equal')
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.set_facecolor("#f8f9fa")
+                        if j == 2:
+                            cbar = fig.colorbar(cs, ax=ax, shrink=0.6)
+                            cbar.set_label(title, rotation=270, labelpad=15)
+                    else:
+                        valid = subset[["PlateLocSide", "PlateLocHeight", metric]].dropna()
+                        if not valid.empty:
+                            if metric in ["WhiffFlag", "HardHitFlag"]:
+                                colors = ['lightblue' if x == 0 else 'red' for x in valid[metric]]
+                                ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
+                                           c=colors, s=40, alpha=0.7, edgecolors='black')
+                            else:
+                                vmin, vmax = 0, 1 if metric != "wOBA_result" else min(valid[metric].max() * 1.1, 1.8)
+                                sc = ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
+                                                c=valid[metric], cmap="RdYlBu_r", s=60,
+                                                edgecolors="black", alpha=0.8,
+                                                vmin=0, vmax=vmax)
+                                if j == 2:
+                                    fig.colorbar(sc, ax=ax, shrink=0.6)
 
-            if j == 0:
-                ax.set_ylabel(title, fontsize=12, fontweight='bold')
-            if i == 2:
-                ax.set_xlabel(group, fontsize=12, fontweight='bold')
+                ax.add_patch(Rectangle((-0.83, 1.5), 1.66, 1.8775, linewidth=2.5,
+                                       edgecolor='black', facecolor='none'))
 
-    fig.suptitle(f"Zone-Level Heat Maps for {selected_hitter}", fontsize=16, fontweight='bold', y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+                ax.set_xlim([-1.5, 1.5])
+                ax.set_ylim([1.0, 4.0])
+                ax.set_aspect('equal')
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_facecolor("#f8f9fa")
 
-    buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches='tight', facecolor='white')
-    plt.close(fig)
-    buf.seek(0)
-    encoded = base64.b64encode(buf.read()).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
+                if j == 0:
+                    ax.set_ylabel(title, fontsize=12, fontweight='bold')
+                if i == 2:
+                    ax.set_xlabel(group, fontsize=12, fontweight='bold')
+
+        fig.suptitle(f"Zone-Level Heat Maps for {selected_hitter}", fontsize=16, fontweight='bold', y=0.98)
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+        buf = BytesIO()
+        plt.savefig(buf, format="png", dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        buf.seek(0)
+        encoded = base64.b64encode(buf.read()).decode("utf-8")
+        return f"data:image/png;base64,{encoded}"
+    except Exception as e:
+        st.error(f"Heatmap generation error: {e}")
+        st.text(traceback.format_exc())
+        return None
 
 def create_scatter_plot(summary_df, breakdown_df, pitcher_name):
     """Create the main RV/100 scatter plot"""
-    fig = make_subplots(rows=1, cols=1, specs=[[{"type": "scatter"}]])
+    try:
+        fig = make_subplots(rows=1, cols=1, specs=[[{"type": "scatter"}]])
 
-    # Add summary points with full hover info
-    for _, row in summary_df.iterrows():
-        fig.add_trace(go.Scatter(
-            x=[row["Batter"]],
-            y=[row["RV/100"]],
-            mode="markers",
-            marker=dict(size=20, color="black"),
-            hovertemplate=(
-                f"<b>{row['Batter']}</b><br>"
-                f"RV/100: {row['RV/100']}<br>"
-                f"wOBA: {row['wOBA']}<br>"
-                f"AVG: {row['AVG']}<br>"
-                f"Whiff%: {row['Whiff%']}<br>"
-                f"SwStr%: {row['SwStr%']}<br>"
-                f"HH%: {row['HH%']}<br>"
-                f"GB%: {row['GB%']}<br>"
-                f"ExitVelo: {row['ExitVelo']}<br>"
-                f"Launch: {row['Launch']}<br>"
-                f"Pitches: {row['Pitches']}<br>"
-                f"InPlay: {row['InPlay']}<extra></extra>"
-            ),
-            showlegend=False
-        ))
+        # Add summary points with full hover info
+        for _, row in summary_df.iterrows():
+            fig.add_trace(go.Scatter(
+                x=[row["Batter"]],
+                y=[row["RV/100"]],
+                mode="markers",
+                marker=dict(size=20, color="black"),
+                hovertemplate=(
+                    f"<b>{row['Batter']}</b><br>"
+                    f"RV/100: {row['RV/100']}<br>"
+                    f"wOBA: {row['wOBA']}<br>"
+                    f"AVG: {row['AVG']}<br>"
+                    f"Whiff%: {row['Whiff%']}<br>"
+                    f"SwStr%: {row['SwStr%']}<br>"
+                    f"HH%: {row['HH%']}<br>"
+                    f"GB%: {row['GB%']}<br>"
+                    f"ExitVelo: {row['ExitVelo']}<br>"
+                    f"Launch: {row['Launch']}<br>"
+                    f"Pitches: {row['Pitches']}<br>"
+                    f"InPlay: {row['InPlay']}<extra></extra>"
+                ),
+                showlegend=False
+            ))
 
-    # Add breakdown points with full hover info
-    for _, row in breakdown_df.iterrows():
-        fig.add_trace(go.Scatter(
-            x=[row["Batter"]],
-            y=[row["RV/100"]],
-            mode="markers+text",
-            marker=dict(size=14, color=color_dict.get(row["PitchGroup"], "gray")),
-            text=[f"{int(row['Pitches'])}P"],
-            textposition="top center",
-            textfont=dict(size=10, color="black"),
-            hovertemplate=(
-                f"<b>{row['Batter']}</b><br>"
-                f"PitchGroup: {row['PitchGroup']}<br>"
-                f"RV/100: {row['RV/100']}<br>"
-                f"wOBA: {row['wOBA']}<br>"
-                f"AVG: {row['AVG']}<br>"
-                f"Whiff%: {row['Whiff%']}<br>"
-                f"SwStr%: {row['SwStr%']}<br>"
-                f"HH%: {row['HH%']}<br>"
-                f"GB%: {row['GB%']}<br>"
-                f"ExitVelo: {row['ExitVelo']}<br>"
-                f"Launch: {row['Launch']}<br>"
-                f"Pitches: {row['Pitches']}<br>"
-                f"InPlay: {row['InPlay']}<extra></extra>"
-            ),
-            showlegend=False
-        ))
+        # Add breakdown points with full hover info
+        for _, row in breakdown_df.iterrows():
+            fig.add_trace(go.Scatter(
+                x=[row["Batter"]],
+                y=[row["RV/100"]],
+                mode="markers+text",
+                marker=dict(size=14, color=color_dict.get(row["PitchGroup"], "gray")),
+                text=[f"{int(row['Pitches'])}P"],
+                textposition="top center",
+                textfont=dict(size=10, color="black"),
+                hovertemplate=(
+                    f"<b>{row['Batter']}</b><br>"
+                    f"PitchGroup: {row['PitchGroup']}<br>"
+                    f"RV/100: {row['RV/100']}<br>"
+                    f"wOBA: {row['wOBA']}<br>"
+                    f"AVG: {row['AVG']}<br>"
+                    f"Whiff%: {row['Whiff%']}<br>"
+                    f"SwStr%: {row['SwStr%']}<br>"
+                    f"HH%: {row['HH%']}<br>"
+                    f"GB%: {row['GB%']}<br>"
+                    f"ExitVelo: {row['ExitVelo']}<br>"
+                    f"Launch: {row['Launch']}<br>"
+                    f"Pitches: {row['Pitches']}<br>"
+                    f"InPlay: {row['InPlay']}<extra></extra>"
+                ),
+                showlegend=False
+            ))
 
-    fig.update_layout(
-        height=700,
-        title=f"Expected Matchup RV/100 + Hitter Summary: {pitcher_name}<br><sub>Black dots = weighted performance | Red/Blue/Green = Fastball/Breaking/Offspeed</sub>",
-        yaxis_title="RV/100",
-        template="simple_white",
-        xaxis=dict(
-            tickmode="array",
-            tickvals=list(range(len(summary_df))),
-            ticktext=summary_df["Batter"].tolist(),
-            tickangle=45
+        fig.update_layout(
+            height=700,
+            title=f"Expected Matchup RV/100 + Hitter Summary: {pitcher_name}<br><sub>Black dots = weighted performance | Red/Blue/Green = Fastball/Breaking/Offspeed</sub>",
+            yaxis_title="RV/100",
+            template="simple_white",
+            xaxis=dict(
+                tickmode="array",
+                tickvals=list(range(len(summary_df))),
+                ticktext=summary_df["Batter"].tolist(),
+                tickangle=45
+            )
         )
-    )
 
-    # Add annotations for better/worse indicators
-    fig.add_annotation(
-        xref="paper", yref="y",
-        x=1.02, y=summary_df["RV/100"].max() + 1 if not summary_df.empty else 5,
-        text="↑ Better for Hitters",
-        showarrow=False,
-        font=dict(size=20, color="green"),
-        align="left"
-    )
+        # Add annotations for better/worse indicators
+        fig.add_annotation(
+            xref="paper", yref="y",
+            x=1.02, y=summary_df["RV/100"].max() + 1 if not summary_df.empty else 5,
+            text="↑ Better for Hitters",
+            showarrow=False,
+            font=dict(size=20, color="green"),
+            align="left"
+        )
 
-    fig.add_annotation(
-        xref="paper", yref="y",
-        x=1.02, y=summary_df["RV/100"].min() - 1 if not summary_df.empty else -5,
-        text="↓ Worse for Hitters",
-        showarrow=False,
-        font=dict(size=20, color="red"),
-        align="left"
-    )
+        fig.add_annotation(
+            xref="paper", yref="y",
+            x=1.02, y=summary_df["RV/100"].min() - 1 if not summary_df.empty else -5,
+            text="↓ Worse for Hitters",
+            showarrow=False,
+            font=dict(size=20, color="red"),
+            align="left"
+        )
 
-    return fig
+        return fig
+    except Exception as e:
+        st.error(f"Scatter plot creation error: {e}")
+        st.text(traceback.format_exc())
+        return None
 
 def create_movement_plot(movement_df):
     """Create pitch movement scatter plot"""
-    movement_df_filtered = movement_df[(movement_df["HorzBreak"].between(-50, 50)) & 
-                                      (movement_df["InducedVertBreak"].between(-50, 50))]
-    
-    movement_fig = go.Figure()
-    for pitch_type, color in color_dict.items():
-        pitch_df = movement_df_filtered[movement_df_filtered["PitchGroup"] == pitch_type]
-        if not pitch_df.empty:
-            movement_fig.add_trace(go.Scatter(
-                x=pitch_df["HorzBreak"],
-                y=pitch_df["InducedVertBreak"],
-                mode="markers",
-                marker=dict(color=color, size=10),
-                name=pitch_type,
-                customdata=pitch_df[["Batter", "RelSpeed", "SpinRate"]],
-                hovertemplate="<b>%{customdata[0]}</b><br>"
-                              "HB: %{x}<br>"
-                              "IVB: %{y}<br>"
-                              "RelSpeed: %{customdata[1]} mph<br>"
-                              "SpinRate: %{customdata[2]}<extra></extra>"
-            ))
-    
-    movement_fig.update_layout(
-        title="Pitch Movement (HorzBreak vs. InducedVertBreak)",
-        xaxis=dict(title="Horizontal Break", range=[-30, 30]),
-        yaxis=dict(title="Induced Vertical Break", range=[-30, 30], scaleanchor="x", scaleratio=1),
-        template="simple_white",
-        height=600,
-        width=1000
-    )
-    
-    return movement_fig
+    try:
+        movement_df_filtered = movement_df[(movement_df["HorzBreak"].between(-50, 50)) & 
+                                          (movement_df["InducedVertBreak"].between(-50, 50))]
+        
+        movement_fig = go.Figure()
+        for pitch_type, color in color_dict.items():
+            pitch_df = movement_df_filtered[movement_df_filtered["PitchGroup"] == pitch_type]
+            if not pitch_df.empty:
+                movement_fig.add_trace(go.Scatter(
+                    x=pitch_df["HorzBreak"],
+                    y=pitch_df["InducedVertBreak"],
+                    mode="markers",
+                    marker=dict(color=color, size=10),
+                    name=pitch_type,
+                    customdata=pitch_df[["Batter", "RelSpeed", "SpinRate"]],
+                    hovertemplate="<b>%{customdata[0]}</b><br>"
+                                  "HB: %{x}<br>"
+                                  "IVB: %{y}<br>"
+                                  "RelSpeed: %{customdata[1]} mph<br>"
+                                  "SpinRate: %{customdata[2]}<extra></extra>"
+                ))
+        
+        movement_fig.update_layout(
+            title="Pitch Movement (HorzBreak vs. InducedVertBreak)",
+            xaxis=dict(title="Horizontal Break", range=[-30, 30]),
+            yaxis=dict(title="Induced Vertical Break", range=[-30, 30], scaleanchor="x", scaleratio=1),
+            template="simple_white",
+            height=600,
+            width=1000
+        )
+        
+        return movement_fig
+    except Exception as e:
+        st.error(f"Movement plot creation error: {e}")
+        st.text(traceback.format_exc())
+        return None
 
 # === MAIN APP ===
 def main():
@@ -332,10 +426,11 @@ def main():
     else:
         st.success(f"✅ Loaded {len(df_all)} rows.")
 
+    # Check if we have MAC module
+    if run_mac is None:
+        st.error("❌ MAC_module not available. Analysis will not work.")
+        return
 
-
-    
-    
     # Sidebar for inputs
     st.sidebar.header("Select Matchup")
     
@@ -391,7 +486,8 @@ def main():
                 
                 # Main scatter plot
                 scatter_fig = create_scatter_plot(summary_df, breakdown_df, selected_pitcher)
-                st.plotly_chart(scatter_fig, use_container_width=True)
+                if scatter_fig:
+                    st.plotly_chart(scatter_fig, use_container_width=True)
                 
                 # Statistics table
                 st.markdown("## 📋 Detailed Statistics")
@@ -418,13 +514,15 @@ def main():
                     
                     # Generate and display heatmap
                     encoded_img = generate_mpl_heatmap_grid(hitter_movement_df, selected_hitter_heatmap)
-                    st.markdown(f"<img src='{encoded_img}' style='width: 100%; max-width: 1200px;'>", 
-                               unsafe_allow_html=True)
+                    if encoded_img:
+                        st.markdown(f"<img src='{encoded_img}' style='width: 100%; max-width: 1200px;'>", 
+                                   unsafe_allow_html=True)
                 
                 # Movement plot
                 st.markdown("## 🌪️ Pitch Movement Analysis")
                 movement_fig = create_movement_plot(movement_df)
-                st.plotly_chart(movement_fig, use_container_width=True)
+                if movement_fig:
+                    st.plotly_chart(movement_fig, use_container_width=True)
                 
 
             except Exception as e:
