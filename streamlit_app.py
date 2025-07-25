@@ -128,6 +128,8 @@ class DatabaseManager:
             conn = self.get_connection()
             df = pd.read_sql_query("SELECT * FROM pitches", conn)
             conn.close()
+            # Cache it for future use
+            self.df_all = df
             return df
     
     def get_pitchers(self):
@@ -478,8 +480,10 @@ def main():
         
         with st.spinner(f"Running MAC analysis for {selected_pitcher} vs {len(selected_hitters)} hitters..."):
             try:
-                # Get the combined dataframe
-                df_all = db_manager.get_combined_dataframe()
+                # Get the combined dataframe directly from the database
+                conn = db_manager.get_connection()
+                df_all = pd.read_sql_query("SELECT * FROM pitches", conn)
+                conn.close()
                 
                 # Create temporary output directory
                 with tempfile.TemporaryDirectory() as temp_dir:
