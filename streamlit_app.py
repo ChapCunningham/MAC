@@ -41,7 +41,7 @@ class DatabaseManager:
             st.info("📂 Downloading NCAA data from Dropbox...")
             
             # Download NCAA data
-            ncaa_url = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=k5cuysoi&dl=1"
+            ncaa_url = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=co7eyva9&dl=1"
             response = requests.get(ncaa_url, timeout=300)
             response.raise_for_status()
             progress_bar.progress(30)
