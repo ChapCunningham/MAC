@@ -409,9 +409,12 @@ def main():
                 movement_fig = create_movement_plot(movement_df)
                 st.plotly_chart(movement_fig, use_container_width=True)
                 
+
             except Exception as e:
-                st.error(f"❌ Error running analysis: {str(e)}")
-    
+                st.error("❌ Error running analysis.")
+                st.text(traceback.format_exc())
+                return
+
     elif run_analysis:
         st.warning("Please select both a pitcher and at least one hitter.")
     
