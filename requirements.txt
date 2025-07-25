@@ -14,3 +14,4 @@ pyarrow>=14.0.0
 requests>=2.31.0
 seaborn
 scikit-learn
+kneed
