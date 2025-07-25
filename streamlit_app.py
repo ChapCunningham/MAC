@@ -24,21 +24,34 @@ st.set_page_config(
 color_dict = {"Fastball": "red", "Breaking": "blue", "Breaking1": "blue", "Breaking2": "cyan", "Offspeed": "green"}
 
 # Data paths (update these to your actual paths)
-NCAA_PARQUET = "NCAA_final.parquet"
+# NCAA_PARQUET = "NCAA_final.parquet"   # https://www.dropbox.com/scl/fi/zozfzz75hamjsx5amp65b/NCAA_final.parquet?rlkey=nalex56psi9rj62fnyo5jhqt5&st=zm9f3dbm&dl=1
 CCBL_PARQUET = "CCBL_current.parquet"
 base_path = "./output"
 os.makedirs(base_path, exist_ok=True)
 
+import tempfile
+import requests
+
 @st.cache_data
 def load_combined_data():
-    """Load and cache the combined dataset"""
     try:
-        ncaa_df = pd.read_parquet(NCAA_PARQUET)
+        # Download the NCAA file from Dropbox
+        DROPBOX_NCAA_URL = "https://www.dropbox.com/scl/fi/zozfzz75hamjsx5amp65b/NCAA_final.parquet?rlkey=nalex56psi9rj62fnyo5jhqt5&st=zm9f3dbm&dl=1"
+        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
+            response = requests.get(DROPBOX_NCAA_URL)
+            if response.status_code != 200:
+                st.error("Failed to download NCAA data from Dropbox.")
+                return pd.DataFrame()
+            tmp_file.write(response.content)
+            tmp_file.flush()
+            ncaa_df = pd.read_parquet(tmp_file.name)
+
         ccbl_df = pd.read_parquet(CCBL_PARQUET)
         return pd.concat([ncaa_df, ccbl_df], ignore_index=True)
-    except FileNotFoundError as e:
-        st.error(f"Data file not found: {e}")
+    except Exception as e:
+        st.error(f"Data load error: {e}")
         return pd.DataFrame()
+
 
 def compute_heatmap_stats(df, metric_col, min_samples=3):
     """Compute heatmap statistics for zone visualization"""
