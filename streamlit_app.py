@@ -17,6 +17,7 @@ try:
     from MAC_module import run_mac
     import tempfile
     import requests
+    import pyarrow
 
     st.success("All imports successful!")
 
@@ -56,9 +57,9 @@ def load_combined_data():
                 return pd.DataFrame()
             tmp_file.write(response.content)
             tmp_file.flush()
-            ncaa_df = pd.read_parquet(tmp_file.name)
+            ncaa_df = pd.read_parquet(tmp_file.name, engine = "pyarrow")
 
-        ccbl_df = pd.read_parquet(CCBL_PARQUET)
+        ccbl_df = pd.read_parquet(CCBL_PARQUET, engine = "pyarrow")
         return pd.concat([ncaa_df, ccbl_df], ignore_index=True)
     except Exception as e:
         st.error(f"Data load error: {e}")
@@ -310,14 +311,26 @@ def create_movement_plot(movement_df):
 def main():
     st.title("⚾ MAC Matchup Calculator")
     st.markdown("---")
-    
-    # Load data
+
     with st.spinner("Loading data..."):
-        df_all = load_combined_data()
+        try:
+            if not os.path.exists(CCBL_PARQUET):
+                st.error(f"Missing file: {CCBL_PARQUET}")
+                st.stop()
+
+            df_all = load_combined_data()
+            if df_all.empty:
+                st.error("Data load returned an empty DataFrame.")
+                st.stop()
+            else:
+                st.success(f"Loaded {len(df_all)} rows.")
+        except Exception as e:
+            st.error("❌ Exception while loading data.")
+            st.text(traceback.format_exc())
+            st.stop()
+
+
     
-    if df_all.empty:
-        st.error("Could not load data. Please check your data files.")
-        return
     
     # Sidebar for inputs
     st.sidebar.header("Select Matchup")
