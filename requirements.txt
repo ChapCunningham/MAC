@@ -27,3 +27,4 @@ kneed>=0.8.0
 
 # Additional packages that might be needed:
 kaleido>=0.2.1
+traceback
