@@ -312,25 +312,25 @@ def main():
     st.title("⚾ MAC Matchup Calculator")
     st.markdown("---")
 
-data_load_error = None
-df_all = pd.DataFrame()  # ensure df_all is defined even if error occurs
-
-with st.spinner("Loading data..."):
-    try:
-        if not os.path.exists(CCBL_PARQUET):
-            data_load_error = f"Missing file: {CCBL_PARQUET}"
-        else:
-            df_all = load_combined_data()
-            if df_all.empty:
-                data_load_error = "Data load returned an empty DataFrame."
-    except Exception as e:
-        data_load_error = f"Exception during data load:\n{traceback.format_exc()}"
-
-if data_load_error:
-    st.error(data_load_error)
-    return
-else:
-    st.success(f"✅ Loaded {len(df_all)} rows.")
+    data_load_error = None
+    df_all = pd.DataFrame()  # ensure df_all is defined even if error occurs
+    
+    with st.spinner("Loading data..."):
+        try:
+            if not os.path.exists(CCBL_PARQUET):
+                data_load_error = f"Missing file: {CCBL_PARQUET}"
+            else:
+                df_all = load_combined_data()
+                if df_all.empty:
+                    data_load_error = "Data load returned an empty DataFrame."
+        except Exception as e:
+            data_load_error = f"Exception during data load:\n{traceback.format_exc()}"
+    
+    if data_load_error:
+        st.error(data_load_error)
+        return
+    else:
+        st.success(f"✅ Loaded {len(df_all)} rows.")
 
 
 
