@@ -131,30 +131,66 @@ def download_ncaa_data():
 
 @st.cache_data(ttl=3600)
 def load_ncaa_data(file_path):
-    """Load NCAA data with memory optimization"""
+    """Load NCAA data with memory optimization and column filtering"""
     try:
         st.write("📊 Loading NCAA parquet file...")
         
-        # Try different engines
-        engines_to_try = ['pyarrow', 'fastparquet']
+        # Define essential columns only (this will dramatically reduce memory usage)
+        essential_columns = [
+            'Pitcher', 'Batter', 'PitcherThrows', 'BatterSide',
+            'RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 
+            'RelHeight', 'RelSide', 'PlateLocSide', 'PlateLocHeight',
+            'TaggedPitchType', 'PitchCall', 'PlayResult', 'KorBB',
+            'ExitSpeed', 'Angle', 'run_value', 'RunsScored', 'OutsOnPlay'
+        ]
+        
+        # Try engines in order of preference for large files
+        engines_to_try = ['fastparquet', 'pyarrow']  # fastparquet often better for large files
         
         for engine in engines_to_try:
             try:
                 if engine == 'pyarrow' and pyarrow is None:
                     continue
                     
-                st.write(f"🔧 Trying {engine} engine...")
+                st.write(f"🔧 Trying {engine} engine with column filtering...")
                 
-                # Load with memory optimization
-                ncaa_df = pd.read_parquet(
-                    file_path, 
-                    engine=engine,
-                    # Only load essential columns to save memory
-                    columns=None  # Load all for now, but we could specify key columns
-                )
+                # First, try to get column info without loading data
+                try:
+                    if engine == 'pyarrow' and pyarrow:
+                        import pyarrow.parquet as pq
+                        parquet_file = pq.ParquetFile(file_path)
+                        available_columns = parquet_file.schema.names
+                        st.write(f"📋 Available columns: {len(available_columns)}")
+                        
+                        # Only load columns that exist
+                        columns_to_load = [col for col in essential_columns if col in available_columns]
+                        st.write(f"📋 Loading {len(columns_to_load)} essential columns")
+                        
+                    else:
+                        # For fastparquet, just try the essential columns
+                        columns_to_load = essential_columns
+                        
+                except Exception as col_error:
+                    st.warning(f"Could not check columns: {col_error}")
+                    columns_to_load = None  # Load all columns as fallback
                 
-                st.write(f"✅ NCAA data loaded with {engine}: {len(ncaa_df)} rows, {len(ncaa_df.columns)} columns")
-                st.write(f"📊 Memory usage: {ncaa_df.memory_usage(deep=True).sum() / (1024*1024):.1f} MB")
+                # Load the data with column filtering
+                if columns_to_load:
+                    ncaa_df = pd.read_parquet(
+                        file_path, 
+                        engine=engine,
+                        columns=columns_to_load
+                    )
+                else:
+                    # Fallback: load all columns
+                    ncaa_df = pd.read_parquet(file_path, engine=engine)
+                
+                # Show success info
+                memory_usage_mb = ncaa_df.memory_usage(deep=True).sum() / (1024*1024)
+                st.write(f"✅ NCAA data loaded with {engine}:")
+                st.write(f"   📊 Rows: {len(ncaa_df):,}")
+                st.write(f"   📊 Columns: {len(ncaa_df.columns)}")
+                st.write(f"   📊 Memory: {memory_usage_mb:.1f} MB")
                 
                 # Clean up temp file
                 try:
@@ -165,10 +201,22 @@ def load_ncaa_data(file_path):
                 return ncaa_df
                 
             except Exception as engine_error:
-                st.warning(f"⚠️ {engine} failed: {engine_error}")
+                error_msg = str(engine_error)
+                st.error(f"❌ {engine} failed: {error_msg}")
+                
+                # Check if it's a memory error
+                if any(keyword in error_msg.lower() for keyword in ['memory', 'ram', 'out of memory', 'allocation']):
+                    st.error("🚨 **MEMORY ERROR DETECTED**")
+                    st.error("This file is too large for the available memory.")
+                    st.error("Possible solutions:")
+                    st.error("1. Use a machine with more RAM")
+                    st.error("2. Process the file in smaller chunks")  
+                    st.error("3. Use a smaller dataset")
+                    break  # Don't try other engines if it's a memory issue
+                    
                 continue
         
-        raise Exception("All parquet engines failed")
+        raise Exception("All parquet engines failed - file may be too large for available memory")
         
     except Exception as e:
         # Clean up temp file on error
@@ -211,11 +259,56 @@ def load_combined_data():
         # Force garbage collection before starting
         gc.collect()
         
+        # Show memory before starting
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_before_mb = process.memory_info().rss / (1024 * 1024)
+            st.write(f"💾 Memory before loading: {memory_before_mb:.1f} MB")
+        except:
+            pass
+        
+        # Add option for different loading strategies
+        loading_strategy = st.radio(
+            "Choose loading strategy:",
+            ["Full Load (Fast but uses more memory)", "Essential Columns Only (Slower but safer)"],
+            index=1  # Default to safer option
+        )
+        
+        if loading_strategy == "Essential Columns Only (Slower but safer)":
+            st.info("🛡️ Using memory-safe loading with essential columns only")
+        
         # Step 1: Download NCAA data
         ncaa_path = download_ncaa_data()
         
-        # Step 2: Load NCAA data
-        ncaa_df = load_ncaa_data(ncaa_path)
+        # Check file size before loading
+        file_size_mb = os.path.getsize(ncaa_path) / (1024 * 1024)
+        st.write(f"📁 File on disk: {file_size_mb:.1f} MB")
+        
+        # Warning for very large files
+        if file_size_mb > 800:
+            st.error("🚨 **VERY LARGE FILE DETECTED**")
+            st.error(f"File size: {file_size_mb:.1f} MB")
+            st.error("This file may be too large for available memory.")
+            
+            # Offer alternative
+            if st.button("❌ Cancel and skip NCAA data (use CCBL only)"):
+                st.warning("Skipping NCAA data - loading CCBL only")
+                try:
+                    os.unlink(ncaa_path)
+                except:
+                    pass
+                return load_ccbl_data()
+            
+            if not st.button("⚠️ Continue anyway (may crash)"):
+                st.stop()
+        
+        # Step 2: Load NCAA data with strategy
+        if loading_strategy == "Essential Columns Only (Slower but safer)":
+            ncaa_df = load_ncaa_data(ncaa_path)
+        else:
+            # Try full load
+            ncaa_df = load_ncaa_data_full(ncaa_path)
         
         # Step 3: Load CCBL data
         ccbl_df = load_ccbl_data()
@@ -228,8 +321,20 @@ def load_combined_data():
         del ncaa_df, ccbl_df
         gc.collect()
         
-        st.write(f"✅ Combined data: {len(combined_df)} rows, {len(combined_df.columns)} columns")
-        st.write(f"📊 Total memory usage: {combined_df.memory_usage(deep=True).sum() / (1024*1024):.1f} MB")
+        # Show final stats
+        memory_usage_mb = combined_df.memory_usage(deep=True).sum() / (1024*1024)
+        st.write(f"✅ **FINAL COMBINED DATA:**")
+        st.write(f"   📊 Total rows: {len(combined_df):,}")
+        st.write(f"   📊 Total columns: {len(combined_df.columns)}")
+        st.write(f"   📊 Memory usage: {memory_usage_mb:.1f} MB")
+        
+        # Show memory after
+        try:
+            memory_after_mb = process.memory_info().rss / (1024 * 1024)
+            st.write(f"💾 Memory after loading: {memory_after_mb:.1f} MB")
+            st.write(f"💾 Memory increase: {memory_after_mb - memory_before_mb:.1f} MB")
+        except:
+            pass
         
         return combined_df
         
@@ -239,6 +344,29 @@ def load_combined_data():
         # Force cleanup on error
         gc.collect()
         return pd.DataFrame()
+
+def load_ncaa_data_full(file_path):
+    """Full load version (for comparison)"""
+    try:
+        st.write("🔧 Attempting full data load...")
+        ncaa_df = pd.read_parquet(file_path, engine='fastparquet')
+        
+        memory_usage_mb = ncaa_df.memory_usage(deep=True).sum() / (1024*1024)
+        st.write(f"✅ Full load successful: {len(ncaa_df):,} rows, {memory_usage_mb:.1f} MB")
+        
+        # Clean up temp file
+        try:
+            os.unlink(file_path)
+        except:
+            pass
+        
+        return ncaa_df
+        
+    except Exception as e:
+        st.error(f"Full load failed: {e}")
+        # Fallback to essential columns
+        st.write("🔄 Falling back to essential columns...")
+        return load_ncaa_data(file_path)
 
 # Simplified functions (removing some to save space)
 def create_simple_scatter_plot(summary_df, pitcher_name):
