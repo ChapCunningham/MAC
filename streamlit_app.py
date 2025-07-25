@@ -1,16 +1,29 @@
-import os
 import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-import base64
-from io import BytesIO
-from scipy import ndimage
-from scipy.interpolate import griddata
-from MAC_module import run_mac
+import trackback
+
+try:
+    import os
+    #import streamlit as st
+    import pandas as pd
+    import numpy as np
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+    import base64
+    from io import BytesIO
+    from scipy import ndimage
+    from scipy.interpolate import griddata
+    from MAC_module import run_mac
+    import tempfile
+    import requests
+
+    st.success("All imports successful!")
+
+except Exception as e:
+    st.error("Error during startup.")
+    st.text(traceback.format_exc())
+    st.stop()
 
 # === CONFIG ===
 st.set_page_config(
@@ -29,8 +42,7 @@ CCBL_PARQUET = "CCBL_current.parquet"
 base_path = "./output"
 os.makedirs(base_path, exist_ok=True)
 
-import tempfile
-import requests
+
 
 @st.cache_data
 def load_combined_data():
