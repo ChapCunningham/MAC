@@ -12,6 +12,18 @@ plotly>=5.17.0
 scipy>=1.12.0
 pyarrow>=14.0.0
 requests>=2.31.0
-seaborn
-scikit-learn
-kneed
+seaborn>=0.12.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+
+# Clustering and optimization
+kneed>=0.8.0
+
+# Missing packages from your code:
+tempfile  # Built-in Python module - no need to install
+base64    # Built-in Python module - no need to install
+io        # Built-in Python module - no need to install
+
+# Additional packages that might be needed:
+kaleido>=0.2.1
