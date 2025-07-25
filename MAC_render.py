@@ -21,7 +21,7 @@ base_path = "./output"
 os.makedirs(base_path, exist_ok=True)
 
 # Dropbox URLs - Replace these with your actual Dropbox direct download links
-NCAA_DROPBOX_URL = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=1l5xu5qa&dl=1"
+NCAA_DROPBOX_URL = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=ilngpt9n&dl=1"
 CCBL_DROPBOX_URL = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=ilngpt9n&dl=1"
 
 def download_file_from_dropbox(url, local_filename):
