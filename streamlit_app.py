@@ -10,6 +10,11 @@ from kneed import KneeLocator
 import requests
 from io import BytesIO
 import os
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from scipy import ndimage
+from scipy.interpolate import griddata
+import base64
 
 # Configure Streamlit
 st.set_page_config(
@@ -22,6 +27,8 @@ st.set_page_config(
 # Constants
 color_dict = {"Fastball": "red", "Breaking": "blue", "Offspeed": "green", "Unknown": "gray"}
 distance_threshold = 0.6
+strike_zone = {"top": 3.3775, "bottom": 1.5, "left": -0.83083, "right": 0.83083}
+swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
 
 class DatabaseManager:
     def __init__(self, db_path="baseball_data.db"):
@@ -53,13 +60,12 @@ class DatabaseManager:
             # Download CCBL data (if available)
             st.info("📂 Downloading CCBL data from Dropbox...")
             try:
-                ccbl_url = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=d88z1j0u&dl=1"  # UPDATE THIS URL
+                ccbl_url = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=d88z1j0u&dl=1"
                 ccbl_response = requests.get(ccbl_url, timeout=180)
-                ccbl_response.raise_for_status()  # This will raise an exception for HTTP errors
+                ccbl_response.raise_for_status()
                 
                 ccbl_df = pd.read_parquet(BytesIO(ccbl_response.content))
                 st.success(f"✅ CCBL data loaded: {len(ccbl_df):,} rows")
-                # Combine datasets
                 df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
                 st.success(f"✅ Combined dataset: {len(df):,} rows")
                 
@@ -127,35 +133,15 @@ class DatabaseManager:
         conn.close()
         return df['Batter'].tolist()
     
-    def get_pitcher_data(self, pitcher_name):
-        """Get all data for a specific pitcher"""
-        conn = self.get_connection()
-        query = """
-            SELECT * FROM pitches 
-            WHERE Pitcher = ? 
-              AND RelSpeed IS NOT NULL 
-              AND InducedVertBreak IS NOT NULL 
-              AND HorzBreak IS NOT NULL 
-              AND SpinRate IS NOT NULL
-        """
-        df = pd.read_sql_query(query, conn, params=[pitcher_name])
-        conn.close()
-        return df
-    
     def get_matchup_data(self, pitcher_name, batter_names):
-        """Get relevant data for matchup analysis - MEMORY EFFICIENT"""
+        """Get ALL data for comprehensive analysis - includes all columns"""
         conn = self.get_connection()
         
-        # Convert batter names to SQL IN clause
         placeholders = ','.join(['?' for _ in batter_names])
         
-        # Get only the data we need for analysis
+        # Get ALL columns for comprehensive analysis
         query = f"""
-            SELECT 
-                Pitcher, Batter, TaggedPitchType, PitchCall, PlayResult, KorBB,
-                RelSpeed, InducedVertBreak, HorzBreak, SpinRate, RelHeight, RelSide,
-                PlateLocSide, PlateLocHeight, ExitSpeed, Angle, run_value, wOBA_result
-            FROM pitches 
+            SELECT * FROM pitches 
             WHERE (Pitcher = ? OR Batter IN ({placeholders}))
               AND RelSpeed IS NOT NULL 
               AND InducedVertBreak IS NOT NULL 
@@ -169,10 +155,10 @@ class DatabaseManager:
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
         
-        # Clean numeric columns
+        # Clean ALL numeric columns
         numeric_cols = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 
                        'RelHeight', 'RelSide', 'PlateLocSide', 'PlateLocHeight', 
-                       'ExitSpeed', 'Angle', 'run_value', 'wOBA_result']
+                       'ExitSpeed', 'Angle', 'run_value', 'wOBA_result', 'RunsScored', 'OutsOnPlay']
         
         for col in numeric_cols:
             if col in df.columns:
@@ -180,15 +166,14 @@ class DatabaseManager:
         
         return df
 
-# Initialize database manager
-@st.cache_resource
-def get_database_manager():
-    return DatabaseManager()
+def clean_numeric_column(series):
+    """Convert a series to numeric, replacing non-numeric values with NaN"""
+    return pd.to_numeric(series, errors='coerce')
 
-def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
-    """Memory-efficient MAC analysis using database queries"""
+def run_comprehensive_mac_analysis(pitcher_name, target_hitters, db_manager):
+    """Comprehensive MAC analysis matching the original Dash app functionality"""
     
-    # Get only the data we need
+    # Get the full dataset
     df = db_manager.get_matchup_data(pitcher_name, target_hitters)
     
     if df.empty:
@@ -200,14 +185,22 @@ def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
         st.warning(f"Insufficient data for pitcher {pitcher_name} ({len(pitcher_pitches)} pitches)")
         return None, None, None
     
-    # Add wOBA if missing
+    # === Compute League Run Environment for wOBA ===
+    total_runs = df['RunsScored'].sum()
+    strikeouts = (df['KorBB'] == 'Strikeout').sum()
+    outs_on_play = df['OutsOnPlay'].fillna(0).sum()
+    total_outs = strikeouts + outs_on_play
+    r_out = total_runs / total_outs if total_outs > 0 else 0
+    
+    # === Scaled wOBA weights ===
+    woba_weights = {
+        'Walk': 0.673, 'HitByPitch': 0.718, 'Single': 0.949,
+        'Double': 1.483, 'Triple': 1.963, 'HomeRun': 2.571
+    }
+    
+    # === Assign wOBA result values to each pitch ===
     if 'wOBA_result' not in df.columns or df['wOBA_result'].isna().all():
         df['wOBA_result'] = 0.0
-        woba_weights = {
-            'Walk': 0.673, 'HitByPitch': 0.718, 'Single': 0.949,
-            'Double': 1.483, 'Triple': 1.963, 'HomeRun': 2.571
-        }
-        
         for result, weight in woba_weights.items():
             if result == 'Walk':
                 df.loc[df['KorBB'] == 'Walk', 'wOBA_result'] = weight
@@ -216,16 +209,19 @@ def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
             elif result in ['Single', 'Double', 'Triple', 'HomeRun']:
                 df.loc[df['PlayResult'] == result, 'wOBA_result'] = weight
     
-    # Clustering features
+    # Feature sets
+    scanning_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide']
     clustering_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate']
-    scanning_features = clustering_features + ['RelHeight', 'RelSide']
     
-    # Cluster pitcher's arsenal
+    df = df.dropna(subset=scanning_features + ["Pitcher", "Batter"])
+    pitcher_pitches = pitcher_pitches.dropna(subset=scanning_features + ["Pitcher", "Batter"])
+    
+    # === Scale features and cluster pitcher's arsenal ===
     scaler = StandardScaler()
     X_cluster = scaler.fit_transform(pitcher_pitches[clustering_features])
     
     # Find optimal clusters
-    max_k = min(6, len(pitcher_pitches) // 10 + 1)
+    max_k = min(10, len(pitcher_pitches) // 10 + 1)
     if max_k < 2:
         optimal_k = 1
         pitcher_pitches['PitchCluster'] = 0
@@ -233,7 +229,7 @@ def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
         bic_scores = []
         ks = range(1, max_k)
         for k in ks:
-            gmm = GaussianMixture(n_components=k, random_state=42, max_iter=50)
+            gmm = GaussianMixture(n_components=k, random_state=42)
             gmm.fit(X_cluster)
             bic_scores.append(gmm.bic(X_cluster))
         
@@ -241,21 +237,20 @@ def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
         optimal_k = knee.elbow or 2
         
         # Fit final model
-        best_gmm = GaussianMixture(n_components=optimal_k, random_state=42, max_iter=50)
+        best_gmm = GaussianMixture(n_components=optimal_k, random_state=42)
         pitcher_pitches['PitchCluster'] = best_gmm.fit_predict(X_cluster)
     
-    # Assign pitch groups
+    # === Assign PitchGroup using TaggedPitchType majority ===
     autopitchtype_to_group = {
-        'Four-Seam': 'Fastball', 'Fastball': 'Fastball', 'TwoSeamFastBall': 'Fastball',
-        'Sinker': 'Fastball', 'Slider': 'Breaking', 'Cutter': 'Breaking',
-        'Curveball': 'Breaking', 'Sweeper': 'Breaking', 'Changeup': 'Offspeed',
-        'Splitter': 'Offspeed', 'ChangeUp': 'Offspeed'
+        'Four-Seam': 'Fastball', 'Fastball': 'Fastball', 'FourSeamFastBall': 'Fastball',
+        'TwoSeamFastBall': 'Fastball', 'Sinker': 'Fastball', 'Slider': 'Breaking',
+        'Cutter': 'Breaking', 'Curveball': 'Breaking', 'Sweeper': 'Breaking',
+        'Changeup': 'Offspeed', 'Splitter': 'Offspeed', 'ChangeUp': 'Offspeed'
     }
     
     # Map clusters to pitch groups
     cluster_to_type = {}
     if optimal_k == 1:
-        # Single cluster case
         if 'TaggedPitchType' in pitcher_pitches.columns:
             most_common_type = pitcher_pitches['TaggedPitchType'].mode()
             if len(most_common_type) > 0:
@@ -284,45 +279,40 @@ def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
     # Calculate pitch group usage
     pitch_group_usage = pitcher_pitches['PitchGroup'].value_counts(normalize=True).to_dict()
     
-    # Calculate similarity for full dataset (memory efficient)
+    # === Tag FULL dataset with MinDistToPitcher ===
     from sklearn.metrics.pairwise import euclidean_distances
-    
-    # Process in smaller batches to avoid memory issues
-    batch_size = 1000
-    df['MinDistToPitcher'] = np.inf
-    
     scaler_all = StandardScaler()
-    pitcher_scaled = scaler_all.fit_transform(pitcher_pitches[scanning_features])
+    df_scaled = scaler_all.fit_transform(df[scanning_features])
+    X_pitcher_full = scaler_all.transform(pitcher_pitches[scanning_features])
+    distances = euclidean_distances(df_scaled, X_pitcher_full)
+    df['MinDistToPitcher'] = distances.min(axis=1)
     
-    for i in range(0, len(df), batch_size):
-        batch = df.iloc[i:i+batch_size]
-        batch_scaled = scaler_all.transform(batch[scanning_features])
-        distances = euclidean_distances(batch_scaled, pitcher_scaled)
-        df.iloc[i:i+batch_size, df.columns.get_loc('MinDistToPitcher')] = distances.min(axis=1)
-    
-    # Assign pitch groups to full dataset
+    # === Assign PitchGroup to entire dataset ===
     if optimal_k > 1:
-        df_scaled = scaler.transform(df[clustering_features])
-        df['PitchCluster'] = best_gmm.predict(df_scaled)
+        df_subset_scaled = scaler.transform(df[clustering_features])
+        df['PitchCluster'] = best_gmm.predict(df_subset_scaled)
     else:
         df['PitchCluster'] = 0
-    
     df['PitchGroup'] = df['PitchCluster'].map(cluster_to_type)
     
-    # Perform matchup analysis
+    # === Comprehensive Matchup Analysis ===
     results = []
     group_breakdown = []
-    
-    swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
     
     for hitter in target_hitters:
         hitter_result = {"Batter": hitter}
         weighted_stats = []
         total_weight = 0
         
+        # Initialize comprehensive accumulators
         total_pitches_seen = 0
-        total_whiffs_seen = 0
         total_swings_seen = 0
+        total_whiffs_seen = 0
+        total_ev_sum = 0
+        total_la_sum = 0
+        total_hard_hits = 0
+        total_gbs = 0
+        total_bips = 0
         total_hits = 0
         total_outs = 0
         total_woba_num = 0
@@ -339,99 +329,385 @@ def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
             if group_pitches.empty:
                 continue
             
-            # Calculate metrics
+            # Clean plate location columns for zone calculation
+            group_pitches['PlateLocHeight'] = clean_numeric_column(group_pitches['PlateLocHeight'])
+            group_pitches['PlateLocSide'] = clean_numeric_column(group_pitches['PlateLocSide'])
+            
+            # Add comprehensive flags
+            group_pitches["InZone"] = (
+                (group_pitches["PlateLocHeight"] >= strike_zone["bottom"]) &
+                (group_pitches["PlateLocHeight"] <= strike_zone["top"]) &
+                (group_pitches["PlateLocSide"] >= strike_zone["left"]) &
+                (group_pitches["PlateLocSide"] <= strike_zone["right"])
+            )
+            group_pitches["Swung"] = group_pitches["PitchCall"].isin(swing_calls)
+            group_pitches["Whiff"] = group_pitches["PitchCall"] == "StrikeSwinging"
+            group_pitches["IsInPlay"] = group_pitches['PitchCall'].isin(["InPlay"])
+            
+            # Basic counts
             total_pitches = len(group_pitches)
+            total_swings = group_pitches["Swung"].sum()
+            total_whiffs = group_pitches["Whiff"].sum()
             total_run_value = group_pitches["run_value"].sum()
+            
+            # Clean exit speed and angle columns
+            group_pitches['ExitSpeed'] = clean_numeric_column(group_pitches['ExitSpeed'])
+            group_pitches['Angle'] = clean_numeric_column(group_pitches['Angle'])
+            
+            # Calculate comprehensive metrics
+            balls_in_play = group_pitches[group_pitches["IsInPlay"]]
+            exit_velo = balls_in_play["ExitSpeed"].mean() if len(balls_in_play) > 0 else np.nan
+            launch_angle = balls_in_play["Angle"].mean() if len(balls_in_play) > 0 else np.nan
+            
+            num_ground_balls = (balls_in_play["Angle"] < 10).sum() if len(balls_in_play) > 0 else 0
+            gb_percent = 100 * num_ground_balls / len(balls_in_play) if len(balls_in_play) > 0 else np.nan
+            
+            num_hard_hits = (balls_in_play["ExitSpeed"] >= 95).sum() if len(balls_in_play) > 0 else 0
+            hh_percent = 100 * num_hard_hits / len(balls_in_play) if len(balls_in_play) > 0 else np.nan
+            
             rv_per_100 = 100 * total_run_value / total_pitches if total_pitches > 0 else 0
             
-            # Other stats
-            swings = group_pitches["PitchCall"].isin(swing_calls).sum()
-            whiffs = (group_pitches["PitchCall"] == "StrikeSwinging").sum()
+            # === Calculate comprehensive AVG ===
+            hit_mask = (
+                (group_pitches["PitchCall"] == "InPlay") &
+                (group_pitches["PlayResult"].isin(["Single", "Double", "Triple", "HomeRun"]))
+            )
+            hits = hit_mask.sum()
             
-            # Hits and outs
-            hits = group_pitches["PlayResult"].isin(["Single", "Double", "Triple", "HomeRun"]).sum() if 'PlayResult' in group_pitches.columns else 0
-            strikeouts = (group_pitches["KorBB"] == "Strikeout").sum() if 'KorBB' in group_pitches.columns else 0
+            out_mask = (
+                ((group_pitches["KorBB"].isin(["Strikeout", "Walk"])) |
+                ((group_pitches["PitchCall"] == "InPlay") & (group_pitches["PlayResult"] == "Out"))) &
+                (group_pitches["PlayResult"] != "Sacrifice")
+            )
+            outs = out_mask.sum()
             
-            # wOBA
-            woba_num = group_pitches["wOBA_result"].sum()
-            woba_den = total_pitches
+            avg = hits / (hits + outs) if (hits + outs) > 0 else np.nan
             
-            # Accumulate
-            total_pitches_seen += total_pitches
-            total_swings_seen += swings
-            total_whiffs_seen += whiffs
-            total_hits += hits
-            total_outs += strikeouts
-            total_woba_num += woba_num
-            total_woba_den += woba_den
+            # === Calculate wOBA for this group ===
+            plate_ending = group_pitches[
+                (group_pitches["KorBB"].isin(["Strikeout", "Walk"])) |
+                (group_pitches["PitchCall"].isin(["InPlay", "HitByPitch"]))
+            ]
             
+            group_woba_numerator = plate_ending["wOBA_result"].sum()
+            group_woba_denominator = len(plate_ending)
+            group_woba = group_woba_numerator / group_woba_denominator if group_woba_denominator > 0 else np.nan
+            
+            # Accumulate for summary
             weighted_stats.append(usage * rv_per_100)
             total_weight += usage
             
-            # Group breakdown
+            total_pitches_seen += total_pitches
+            total_swings_seen += total_swings
+            total_whiffs_seen += total_whiffs
+            total_bips += len(balls_in_play)
+            total_hits += hits
+            total_outs += outs
+            total_woba_num += group_woba_numerator
+            total_woba_den += group_woba_denominator
+            
+            if not np.isnan(exit_velo) and len(balls_in_play) > 0:
+                total_ev_sum += exit_velo * len(balls_in_play)
+            if not np.isnan(launch_angle) and len(balls_in_play) > 0:
+                total_la_sum += launch_angle * len(balls_in_play)
+            if not np.isnan(num_hard_hits):
+                total_hard_hits += num_hard_hits
+            if not np.isnan(num_ground_balls):
+                total_gbs += num_ground_balls
+            
+            # Group breakdown with comprehensive stats
             group_breakdown.append({
                 "Batter": hitter,
                 "PitchGroup": group,
+                "AVG": round(avg, 3) if not np.isnan(avg) else np.nan,
                 "RV/100": round(rv_per_100, 2),
+                "Whiff%": round(100 * total_whiffs / total_swings, 1) if total_swings > 0 else np.nan,
+                "SwStr%": round(100 * total_whiffs / total_pitches, 1) if total_pitches > 0 else np.nan,
+                "HH%": round(hh_percent, 1) if not np.isnan(hh_percent) else np.nan,
+                "ExitVelo": round(exit_velo, 1) if not np.isnan(exit_velo) else np.nan,
+                "Launch": round(launch_angle, 1) if not np.isnan(launch_angle) else np.nan,
+                "GB%": round(gb_percent, 1) if not np.isnan(gb_percent) else np.nan,
+                "Usage": round(usage * 100, 1),
                 "Pitches": total_pitches,
-                "Whiff%": round(100 * whiffs / swings, 1) if swings > 0 else 0,
-                "Usage": round(usage * 100, 1)
+                "InPlay": len(balls_in_play),
+                "wOBA": round(group_woba, 3) if not np.isnan(group_woba) else np.nan,
             })
         
-        # Summary
-        weighted_rv = sum(weighted_stats) / total_weight if total_weight > 0 else 0
+        # Summary with comprehensive stats
+        weighted_rv = sum(weighted_stats) / total_weight if total_weight > 0 else np.nan
         hitter_result["RV/100"] = round(weighted_rv, 2)
+        hitter_result["AVG"] = round(total_hits / (total_hits + total_outs), 3) if (total_hits + total_outs) > 0 else np.nan
+        hitter_result["Whiff%"] = round(100 * total_whiffs_seen / total_swings_seen, 1) if total_swings_seen > 0 else np.nan
+        hitter_result["SwStr%"] = round(100 * total_whiffs_seen / total_pitches_seen, 1) if total_pitches_seen > 0 else np.nan
+        hitter_result["ExitVelo"] = round(total_ev_sum / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["Launch"] = round(total_la_sum / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["HH%"] = round(100 * total_hard_hits / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["GB%"] = round(100 * total_gbs / total_bips, 1) if total_bips > 0 else np.nan
         hitter_result["Pitches"] = total_pitches_seen
-        hitter_result["Whiff%"] = round(100 * total_whiffs_seen / total_swings_seen, 1) if total_swings_seen > 0 else 0
-        hitter_result["AVG"] = round(total_hits / (total_hits + total_outs), 3) if (total_hits + total_outs) > 0 else 0
-        hitter_result["wOBA"] = round(total_woba_num / total_woba_den, 3) if total_woba_den > 0 else 0
+        hitter_result["InPlay"] = total_bips
+        hitter_result["wOBA"] = round(total_woba_num / total_woba_den, 3) if total_woba_den > 0 else np.nan
         
         results.append(hitter_result)
     
     return pd.DataFrame(results), pd.DataFrame(group_breakdown), df
 
-def create_visualization(summary_df, breakdown_df, pitcher_name):
-    """Create the main visualization"""
+def create_comprehensive_visualization(summary_df, breakdown_df, pitcher_name):
+    """Create comprehensive visualization with detailed hover info"""
     fig = make_subplots(rows=1, cols=1)
     
-    # Add summary points
-    fig.add_trace(go.Scatter(
-        x=summary_df["Batter"],
-        y=summary_df["RV/100"],
-        mode="markers",
-        marker=dict(size=20, color="black"),
-        name="Overall",
-        hovertemplate="<b>%{x}</b><br>RV/100: %{y}<br>Pitches: %{customdata}<extra></extra>",
-        customdata=summary_df["Pitches"]
-    ))
-    
-    # Add breakdown points
-    for group in breakdown_df["PitchGroup"].unique():
-        group_data = breakdown_df[breakdown_df["PitchGroup"] == group]
+    # Add summary points with comprehensive hover info
+    for _, row in summary_df.iterrows():
         fig.add_trace(go.Scatter(
-            x=group_data["Batter"],
-            y=group_data["RV/100"],
+            x=[row["Batter"]],
+            y=[row["RV/100"]],
             mode="markers",
-            marker=dict(size=12, color=color_dict.get(group, "gray")),
-            name=group,
-            hovertemplate=f"<b>%{{x}}</b><br>{group}<br>RV/100: %{{y}}<br>Pitches: %{{customdata}}<extra></extra>",
-            customdata=group_data["Pitches"]
+            marker=dict(size=20, color="black"),
+            name="Overall",
+            hovertemplate=(
+                f"<b>{row['Batter']}</b><br>"
+                f"RV/100: {row['RV/100']}<br>"
+                f"wOBA: {row['wOBA']}<br>"
+                f"AVG: {row['AVG']}<br>"
+                f"Whiff%: {row['Whiff%']}<br>"
+                f"SwStr%: {row['SwStr%']}<br>"
+                f"HH%: {row['HH%']}<br>"
+                f"GB%: {row['GB%']}<br>"
+                f"ExitVelo: {row['ExitVelo']}<br>"
+                f"Launch: {row['Launch']}<br>"
+                f"Pitches: {row['Pitches']}<br>"
+                f"InPlay: {row['InPlay']}<extra></extra>"
+            ),
+            showlegend=False
+        ))
+    
+    # Add breakdown points with comprehensive hover info
+    for _, row in breakdown_df.iterrows():
+        fig.add_trace(go.Scatter(
+            x=[row["Batter"]],
+            y=[row["RV/100"]],
+            mode="markers+text",
+            marker=dict(size=14, color=color_dict.get(row["PitchGroup"], "gray")),
+            text=[f"{int(row['Pitches'])}P"],
+            textposition="top center",
+            textfont=dict(size=10, color="black"),
+            hovertemplate=(
+                f"<b>{row['Batter']}</b><br>"
+                f"PitchGroup: {row['PitchGroup']}<br>"
+                f"RV/100: {row['RV/100']}<br>"
+                f"wOBA: {row['wOBA']}<br>"
+                f"AVG: {row['AVG']}<br>"
+                f"Whiff%: {row['Whiff%']}<br>"
+                f"SwStr%: {row['SwStr%']}<br>"
+                f"HH%: {row['HH%']}<br>"
+                f"GB%: {row['GB%']}<br>"
+                f"ExitVelo: {row['ExitVelo']}<br>"
+                f"Launch: {row['Launch']}<br>"
+                f"Pitches: {row['Pitches']}<br>"
+                f"InPlay: {row['InPlay']}<extra></extra>"
+            ),
+            showlegend=False
         ))
     
     fig.update_layout(
-        title=f"MAC Analysis: {pitcher_name}",
+        title=f"MAC Analysis: {pitcher_name} - Expected Weighted Performance vs. Pitch-Type Specific Performance",
         xaxis_title="Hitters",
         yaxis_title="RV/100 (Higher = Better for Hitter)",
         template="plotly_white",
-        height=600,
+        height=700,
         showlegend=True
+    )
+    
+    # Add annotations for better understanding
+    fig.add_annotation(
+        xref="paper", yref="y",
+        x=1.02, y=summary_df["RV/100"].max() + 1 if not summary_df.empty else 5,
+        text="↑ Better for Hitters",
+        showarrow=False,
+        font=dict(size=16, color="green"),
+        align="left"
+    )
+    
+    fig.add_annotation(
+        xref="paper", yref="y",
+        x=1.02, y=summary_df["RV/100"].min() - 1 if not summary_df.empty else -5,
+        text="↓ Worse for Hitters",
+        showarrow=False,
+        font=dict(size=16, color="red"),
+        align="left"
     )
     
     return fig
 
+def create_movement_chart(df, target_hitters):
+    """Create pitch movement chart"""
+    movement_df = df[df["Batter"].isin(target_hitters)].copy()
+    movement_df = movement_df[
+        (movement_df["HorzBreak"].between(-50, 50)) & 
+        (movement_df["InducedVertBreak"].between(-50, 50))
+    ]
+    
+    fig = go.Figure()
+    
+    for pitch_type, color in color_dict.items():
+        pitch_df = movement_df[movement_df["PitchGroup"] == pitch_type]
+        if not pitch_df.empty:
+            fig.add_trace(go.Scatter(
+                x=pitch_df["HorzBreak"],
+                y=pitch_df["InducedVertBreak"],
+                mode="markers",
+                marker=dict(color=color, size=10, opacity=0.7),
+                name=pitch_type,
+                customdata=pitch_df[["Batter", "RelSpeed", "SpinRate"]],
+                hovertemplate="<b>%{customdata[0]}</b><br>"
+                              "HB: %{x}<br>"
+                              "IVB: %{y}<br>"
+                              "RelSpeed: %{customdata[1]} mph<br>"
+                              "SpinRate: %{customdata[2]}<extra></extra>"
+            ))
+    
+    fig.update_layout(
+        title="Pitch Movement Analysis (Similar Pitches to Pitcher's Arsenal)",
+        xaxis=dict(title="Horizontal Break (inches)", range=[-30, 30]),
+        yaxis=dict(title="Induced Vertical Break (inches)", range=[-30, 30], scaleanchor="x", scaleratio=1),
+        template="plotly_white",
+        height=600,
+        width=800
+    )
+    
+    return fig
+
+def compute_heatmap_stats(df, metric_col, min_samples=3):
+    """Compute heatmap statistics for zone analysis"""
+    valid = df[["PlateLocSide", "PlateLocHeight", metric_col]].dropna()
+    if len(valid) < min_samples:
+        return None, None, None
+
+    x_range = np.linspace(-2, 2, 100)
+    y_range = np.linspace(0.5, 4.5, 100)
+    X, Y = np.meshgrid(x_range, y_range)
+
+    try:
+        points = valid[["PlateLocSide", "PlateLocHeight"]].values
+        values = valid[metric_col].values
+        Z = griddata(points, values, (X, Y), method='linear', fill_value=0)
+
+        if len(valid) < 10:
+            sigma = 0.5
+        elif len(valid) < 25:
+            sigma = 1.0
+        else:
+            sigma = 1.5
+
+        Z_smooth = ndimage.gaussian_filter(Z, sigma=sigma, mode='constant', cval=0)
+
+        mask = np.zeros_like(Z_smooth)
+        for i in range(len(x_range)):
+            for j in range(len(y_range)):
+                dist = np.sqrt((points[:, 0] - x_range[i])**2 + (points[:, 1] - y_range[j])**2)
+                if np.min(dist) < 0.8:
+                    mask[j, i] = 1
+
+        Z_smooth *= mask
+        Z_smooth[Z_smooth < 0.01] = 0
+        return x_range, y_range, Z_smooth
+    except Exception as e:
+        st.error(f"Heatmap error: {e}")
+        return None, None, None
+
+def generate_zone_heatmap(df, selected_hitter):
+    """Generate zone-level heatmap for a specific hitter"""
+    fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+    metrics = [("WhiffFlag", "Whiff Rate"), ("HardHitFlag", "Hard Hit Rate"), ("wOBA_result", "wOBA")]
+    pitch_groups = ["Fastball", "Breaking", "Offspeed"]
+
+    # Add flags to dataframe
+    df["WhiffFlag"] = (df["PitchCall"] == "StrikeSwinging").astype(int)
+    df["HardHitFlag"] = ((df["ExitSpeed"] >= 95) & df["ExitSpeed"].notna()).astype(int)
+
+    for i, (metric, title) in enumerate(metrics):
+        for j, group in enumerate(pitch_groups):
+            ax = axes[i, j]
+            subset = df[df["PitchGroup"] == group].copy()
+
+            if len(subset) == 0:
+                ax.text(0, 2.75, "No Data", ha='center', va='center', fontsize=12)
+            else:
+                x_range, y_range, z = compute_heatmap_stats(subset, metric)
+
+                if z is not None and np.any(z > 0):
+                    X, Y = np.meshgrid(x_range, y_range)
+
+                    if metric == "wOBA_result":
+                        actual_max = np.max(z[z > 0])
+                        vmax = min(actual_max * 1.1, 1.8)
+                        vmin = 0
+                        cmap = "RdYlBu_r"
+                        levels = np.linspace(vmin, vmax, 20)
+                    else:
+                        vmin, vmax = 0, 1
+                        cmap = "RdYlBu_r"
+                        levels = np.linspace(0, 1, 20)
+
+                    cs = ax.contourf(X, Y, z, levels=levels, cmap=cmap,
+                                     vmin=vmin, vmax=vmax, alpha=0.8, extend='both')
+                    ax.contour(X, Y, z, levels=levels[::4], colors='white',
+                               linewidths=0.5, alpha=0.3)
+
+                    if j == 2:
+                        cbar = fig.colorbar(cs, ax=ax, shrink=0.6)
+                        cbar.set_label(title, rotation=270, labelpad=15)
+                else:
+                    valid = subset[["PlateLocSide", "PlateLocHeight", metric]].dropna()
+                    if not valid.empty:
+                        if metric in ["WhiffFlag", "HardHitFlag"]:
+                            colors = ['lightblue' if x == 0 else 'red' for x in valid[metric]]
+                            ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
+                                       c=colors, s=40, alpha=0.7, edgecolors='black')
+                        else:
+                            vmin, vmax = 0, 1 if metric != "wOBA_result" else min(valid[metric].max() * 1.1, 1.8)
+                            sc = ax.scatter(valid["PlateLocSide"], valid["PlateLocHeight"],
+                                            c=valid[metric], cmap="RdYlBu_r", s=60,
+                                            edgecolors="black", alpha=0.8,
+                                            vmin=0, vmax=vmax)
+                            if j == 2:
+                                fig.colorbar(sc, ax=ax, shrink=0.6)
+
+            # Add strike zone
+            strike_zone_rect = patches.Rectangle((-0.83, 1.5), 1.66, 1.8775, linewidth=2.5,
+                                               edgecolor='black', facecolor='none')
+            ax.add_patch(strike_zone_rect)
+
+            ax.set_xlim([-1.5, 1.5])
+            ax.set_ylim([1.0, 4.0])
+            ax.set_aspect('equal')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_facecolor("#f8f9fa")
+
+            if j == 0:
+                ax.set_ylabel(title, fontsize=12, fontweight='bold')
+            if i == 2:
+                ax.set_xlabel(group, fontsize=12, fontweight='bold')
+
+    fig.suptitle(f"Zone-Level Heat Maps for {selected_hitter}", fontsize=16, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    # Convert to base64 for Streamlit
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    encoded = base64.b64encode(buf.read()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
+# Initialize database manager
+@st.cache_resource
+def get_database_manager():
+    return DatabaseManager()
+
 def main():
     st.title("⚾ MAC Baseball Analytics")
-    st.markdown("**Memory-Efficient Version** - Using SQLite database for optimal performance")
+    st.markdown("**Comprehensive MAC Analysis** - Full feature parity with Dash application")
     
     # Initialize database
     try:
@@ -453,6 +729,11 @@ def main():
                 os.remove("baseball_data.db")
             st.cache_resource.clear()
             st.rerun()
+        
+        # Add analysis parameters
+        st.header("🎯 Analysis Parameters")
+        st.metric("Distance Threshold", f"{distance_threshold}")
+        st.info("Pitches within this similarity distance to the pitcher's arsenal are included in the analysis.")
     
     # Get available options
     with st.spinner("Loading available players..."):
@@ -492,14 +773,14 @@ def main():
         )
     
     # Analysis
-    if st.button("🚀 Run MAC Analysis", type="primary", use_container_width=True):
+    if st.button("🚀 Run Comprehensive MAC Analysis", type="primary", use_container_width=True):
         if not selected_pitcher or not selected_hitters:
             st.warning("Please select both a pitcher and at least one hitter.")
             return
         
-        with st.spinner(f"Analyzing {selected_pitcher} vs {len(selected_hitters)} hitters..."):
+        with st.spinner(f"Running comprehensive analysis for {selected_pitcher} vs {len(selected_hitters)} hitters..."):
             try:
-                summary_df, breakdown_df, _ = run_mac_analysis_efficient(
+                summary_df, breakdown_df, full_df = run_comprehensive_mac_analysis(
                     selected_pitcher, selected_hitters, db_manager
                 )
             except Exception as e:
@@ -507,25 +788,74 @@ def main():
                 return
         
         if summary_df is not None and not summary_df.empty:
-            st.success("✅ Analysis complete!")
+            st.success("✅ Comprehensive analysis complete!")
             
-            # Visualization
-            fig = create_visualization(summary_df, breakdown_df, selected_pitcher)
+            # Main visualization
+            fig = create_comprehensive_visualization(summary_df, breakdown_df, selected_pitcher)
             st.plotly_chart(fig, use_container_width=True)
             
-            # Data tables
+            # Comprehensive data tables
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Summary Statistics")
+                st.subheader("📊 Summary Statistics")
                 st.dataframe(summary_df, use_container_width=True, hide_index=True)
             
             with col2:
-                st.subheader("Pitch Group Breakdown")
+                st.subheader("🎯 Pitch Group Breakdown")
                 st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
             
+            # Movement chart
+            st.subheader("🌪️ Pitch Movement Analysis")
+            movement_fig = create_movement_chart(full_df, selected_hitters)
+            st.plotly_chart(movement_fig, use_container_width=True)
+            
+            # Zone analysis
+            st.subheader("🎯 Zone-Level Heat Map Analysis")
+            selected_hitter_heatmap = st.selectbox(
+                "Select hitter for detailed zone analysis:",
+                selected_hitters,
+                key="heatmap_hitter"
+            )
+            
+            if selected_hitter_heatmap:
+                with st.spinner(f"Generating zone heatmap for {selected_hitter_heatmap}..."):
+                    # Filter data for selected hitter
+                    hitter_data = full_df[
+                        (full_df["Batter"] == selected_hitter_heatmap) &
+                        (full_df["MinDistToPitcher"] <= distance_threshold)
+                    ].copy()
+                    
+                    if not hitter_data.empty:
+                        heatmap_img = generate_zone_heatmap(hitter_data, selected_hitter_heatmap)
+                        st.markdown(f"<img src='{heatmap_img}' style='width: 100%; max-width: 1200px;'>", 
+                                  unsafe_allow_html=True)
+                    else:
+                        st.warning(f"No data available for {selected_hitter_heatmap} zone analysis.")
+            
+            # Coverage analysis
+            st.subheader("📈 Coverage Matrix")
+            coverage_matrix = pd.DataFrame(
+                index=selected_hitters, 
+                columns=["Fastball", "Breaking", "Offspeed"]
+            ).fillna(0)
+            
+            for hitter in selected_hitters:
+                for group in ["Fastball", "Breaking", "Offspeed"]:
+                    matches = full_df[
+                        (full_df["Batter"] == hitter) &
+                        (full_df["PitchGroup"] == group) &
+                        (full_df["MinDistToPitcher"] <= distance_threshold)
+                    ]
+                    coverage_matrix.loc[hitter, group] = len(matches)
+            
+            st.dataframe(coverage_matrix.astype(int), use_container_width=True)
+            st.info("📊 Coverage Matrix shows pitch counts within distance threshold for each hitter vs pitch group combination")
+            
             # Downloads
-            col1, col2 = st.columns(2)
+            st.subheader("💾 Download Results")
+            col1, col2, col3 = st.columns(3)
+            
             with col1:
                 csv_summary = summary_df.to_csv(index=False)
                 st.download_button(
@@ -534,6 +864,7 @@ def main():
                     f"{selected_pitcher.replace(', ', '_')}_summary.csv",
                     "text/csv"
                 )
+            
             with col2:
                 csv_breakdown = breakdown_df.to_csv(index=False)
                 st.download_button(
@@ -542,6 +873,62 @@ def main():
                     f"{selected_pitcher.replace(', ', '_')}_breakdown.csv",
                     "text/csv"
                 )
+            
+            with col3:
+                # Filter and save pitch-level data
+                filtered_df = full_df[
+                    (full_df["Batter"].isin(selected_hitters)) &
+                    (full_df["MinDistToPitcher"] <= distance_threshold)
+                ].copy()
+                
+                cols_to_keep = [
+                    "Pitcher", "PitcherThrows", "Batter", "PitchGroup", "RelSpeed", 
+                    "InducedVertBreak", "HorzBreak", "SpinRate", "RelHeight",
+                    "PlateLocSide", "PlateLocHeight", "ExitSpeed", "Angle", 
+                    "PitchCall", "PlayResult", "wOBA_result", "run_value"
+                ]
+                
+                available_cols = [col for col in cols_to_keep if col in filtered_df.columns]
+                csv_filtered = filtered_df[available_cols].to_csv(index=False)
+                
+                st.download_button(
+                    "📥 Download Pitch Data",
+                    csv_filtered,
+                    f"{selected_pitcher.replace(', ', '_')}_pitch_level.csv",
+                    "text/csv"
+                )
+            
+            # Analysis insights
+            st.subheader("🔍 Analysis Insights")
+            
+            # Calculate some quick insights
+            best_matchup = summary_df.loc[summary_df["RV/100"].idxmin(), "Batter"] if not summary_df.empty else "N/A"
+            worst_matchup = summary_df.loc[summary_df["RV/100"].idxmax(), "Batter"] if not summary_df.empty else "N/A"
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "Best Matchup (Pitcher)",
+                    best_matchup,
+                    f"RV/100: {summary_df['RV/100'].min():.2f}" if not summary_df.empty else "N/A"
+                )
+            
+            with col2:
+                st.metric(
+                    "Worst Matchup (Pitcher)",
+                    worst_matchup,
+                    f"RV/100: {summary_df['RV/100'].max():.2f}" if not summary_df.empty else "N/A"
+                )
+            
+            with col3:
+                avg_rv = summary_df["RV/100"].mean() if not summary_df.empty else 0
+                st.metric(
+                    "Average RV/100",
+                    f"{avg_rv:.2f}",
+                    "Lower is better for pitcher"
+                )
+        
         else:
             st.warning("❌ No sufficient data found for this matchup.")
 
