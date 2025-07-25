@@ -24,7 +24,7 @@ st.set_page_config(
 color_dict = {"Fastball": "red", "Breaking": "blue", "Breaking1": "blue", "Breaking2": "cyan", "Offspeed": "green"}
 
 # Data paths (update these to your actual paths)
-NCAA_PARQUET = ".NCAA_final.parquet"
+NCAA_PARQUET = "NCAA_final.parquet"
 CCBL_PARQUET = "CCBL_current.parquet"
 base_path = "./output"
 os.makedirs(base_path, exist_ok=True)
