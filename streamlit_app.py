@@ -1,5 +1,5 @@
 import streamlit as st
-import trackback
+import traceback
 
 try:
     import os
