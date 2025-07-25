@@ -1,18 +1,14 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import sqlite3
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests
-from io import BytesIO
-import base64
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from scipy import ndimage
-from scipy.interpolate import griddata
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
 from kneed import KneeLocator
+import requests
+from io import BytesIO
 import os
 
 # Configure Streamlit
@@ -23,165 +19,232 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-.main .block-container {
-    max-width: 1400px;
-    padding-top: 1rem;
-}
-.stSelectbox > div > div > select {
-    background-color: #f0f2f6;
-}
-div[data-testid="metric-container"] {
-    background-color: #f0f2f6;
-    border: 1px solid #cccccc;
-    padding: 5% 5% 5% 10%;
-    border-radius: 5px;
-    color: rgb(30, 103, 119);
-    overflow-wrap: break-word;
-}
-</style>
-""", unsafe_allow_html=True)
-
 # Constants
 color_dict = {"Fastball": "red", "Breaking": "blue", "Offspeed": "green", "Unknown": "gray"}
 distance_threshold = 0.6
-strike_zone = {"top": 3.3775, "bottom": 1.5, "left": -0.83083, "right": 0.83083}
-swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
 
-@st.cache_data(ttl=3600, show_spinner=True)
-def load_data_from_dropbox():
-    """Load data from Dropbox with caching"""
+class DatabaseManager:
+    def __init__(self, db_path="baseball_data.db"):
+        self.db_path = db_path
+        self.ensure_database_exists()
     
-    # Convert Dropbox share link to direct download link
-    ncaa_url = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=k5cuysoi&dl=1"  # Changed dl=0 to dl=1
+    def ensure_database_exists(self):
+        """Download and create database if it doesn't exist"""
+        if not os.path.exists(self.db_path):
+            st.info("📂 Setting up database for first time use...")
+            self.create_database_from_dropbox()
     
-    try:
-        st.info("📂 Loading NCAA data from Dropbox...")
-        response = requests.get(ncaa_url, timeout=300)  # 5 minute timeout
-        response.raise_for_status()
+    def create_database_from_dropbox(self):
+        """Create database from both NCAA (Dropbox) and CCBL (GitHub) data"""
+        try:
+            progress_bar = st.progress(0)
+            st.info("📂 Downloading NCAA data from Dropbox...")
+            
+            # Download NCAA data
+            ncaa_url = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=k5cuysoi&dl=1"
+            response = requests.get(ncaa_url, timeout=300)
+            response.raise_for_status()
+            progress_bar.progress(30)
+            
+            ncaa_df = pd.read_parquet(BytesIO(response.content))
+            st.success(f"✅ NCAA data loaded: {len(ncaa_df):,} rows")
+            progress_bar.progress(50)
+            
+            # Download CCBL data (if available)
+            st.info("📂 Downloading CCBL data from GitHub...")
+            try:
+                ccbl_url = "https://github.com/yourusername/yourrepo/raw/main/CCBL_current.parquet"  # UPDATE THIS URL
+                ccbl_response = requests.get(ccbl_url, timeout=180)
+                if ccbl_response.status_code == 200:
+                    ccbl_df = pd.read_parquet(BytesIO(ccbl_response.content))
+                    st.success(f"✅ CCBL data loaded: {len(ccbl_df):,} rows")
+                    
+                    # Combine datasets
+                    df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
+                    st.success(f"✅ Combined dataset: {len(df):,} rows")
+                else:
+                    st.warning("⚠️ CCBL data not found, using NCAA only")
+                    df = ncaa_df
+            except Exception as e:
+                st.warning(f"⚠️ Could not load CCBL data: {e}")
+                st.info("Using NCAA data only")
+                df = ncaa_df
+            
+            progress_bar.progress(70)
+            
+            # Create SQLite database
+            conn = sqlite3.connect(self.db_path)
+            df.to_sql('pitches', conn, if_exists='replace', index=False)
+            progress_bar.progress(85)
+            
+            # Create indexes
+            cursor = conn.cursor()
+            cursor.execute("CREATE INDEX idx_pitcher ON pitches(Pitcher)")
+            cursor.execute("CREATE INDEX idx_batter ON pitches(Batter)")
+            cursor.execute("CREATE INDEX idx_pitcher_batter ON pitches(Pitcher, Batter)")
+            
+            # Create summary tables
+            cursor.execute("""
+                CREATE TABLE pitcher_summary AS
+                SELECT 
+                    Pitcher,
+                    COUNT(*) as total_pitches,
+                    AVG(RelSpeed) as avg_speed,
+                    AVG(InducedVertBreak) as avg_ivb,
+                    AVG(HorzBreak) as avg_hb,
+                    AVG(SpinRate) as avg_spin
+                FROM pitches 
+                WHERE RelSpeed IS NOT NULL AND InducedVertBreak IS NOT NULL 
+                  AND HorzBreak IS NOT NULL AND SpinRate IS NOT NULL
+                GROUP BY Pitcher
+                HAVING COUNT(*) >= 10
+            """)
+            
+            conn.commit()
+            conn.close()
+            progress_bar.progress(100)
+            st.success("✅ Database created successfully!")
+            
+        except Exception as e:
+            st.error(f"❌ Error creating database: {e}")
+            raise
+    
+    def get_connection(self):
+        """Get database connection"""
+        return sqlite3.connect(self.db_path)
+    
+    def get_pitchers(self):
+        """Get list of pitchers with sufficient data"""
+        conn = self.get_connection()
+        query = "SELECT Pitcher FROM pitcher_summary ORDER BY Pitcher"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df['Pitcher'].tolist()
+    
+    def get_batters(self):
+        """Get list of batters"""
+        conn = self.get_connection()
+        query = "SELECT DISTINCT Batter FROM pitches WHERE Batter IS NOT NULL ORDER BY Batter"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df['Batter'].tolist()
+    
+    def get_pitcher_data(self, pitcher_name):
+        """Get all data for a specific pitcher"""
+        conn = self.get_connection()
+        query = """
+            SELECT * FROM pitches 
+            WHERE Pitcher = ? 
+              AND RelSpeed IS NOT NULL 
+              AND InducedVertBreak IS NOT NULL 
+              AND HorzBreak IS NOT NULL 
+              AND SpinRate IS NOT NULL
+        """
+        df = pd.read_sql_query(query, conn, params=[pitcher_name])
+        conn.close()
+        return df
+    
+    def get_matchup_data(self, pitcher_name, batter_names):
+        """Get relevant data for matchup analysis - MEMORY EFFICIENT"""
+        conn = self.get_connection()
         
-        ncaa_df = pd.read_parquet(BytesIO(response.content))
-        st.success(f"✅ Loaded NCAA data: {len(ncaa_df):,} pitches")
+        # Convert batter names to SQL IN clause
+        placeholders = ','.join(['?' for _ in batter_names])
         
-        # For now, just use NCAA data. You can add CCBL later if needed
-        return ncaa_df
+        # Get only the data we need for analysis
+        query = f"""
+            SELECT 
+                Pitcher, Batter, TaggedPitchType, PitchCall, PlayResult, KorBB,
+                RelSpeed, InducedVertBreak, HorzBreak, SpinRate, RelHeight, RelSide,
+                PlateLocSide, PlateLocHeight, ExitSpeed, Angle, run_value, wOBA_result
+            FROM pitches 
+            WHERE (Pitcher = ? OR Batter IN ({placeholders}))
+              AND RelSpeed IS NOT NULL 
+              AND InducedVertBreak IS NOT NULL 
+              AND HorzBreak IS NOT NULL 
+              AND SpinRate IS NOT NULL
+              AND Pitcher IS NOT NULL 
+              AND Batter IS NOT NULL
+        """
         
-    except Exception as e:
-        st.error(f"❌ Error loading data: {str(e)}")
-        st.info("Using sample data for demonstration...")
-        return create_sample_data()
+        params = [pitcher_name] + batter_names
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        
+        # Clean numeric columns
+        numeric_cols = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 
+                       'RelHeight', 'RelSide', 'PlateLocSide', 'PlateLocHeight', 
+                       'ExitSpeed', 'Angle', 'run_value', 'wOBA_result']
+        
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        return df
 
-def create_sample_data():
-    """Create sample data for testing"""
-    np.random.seed(42)
-    
-    pitchers = [f"Smith, John", f"Johnson, Mike", f"Williams, Dave"] * 10
-    batters = [f"Batter_{i}" for i in range(50)]
-    
-    data = []
-    for _ in range(2000):
-        data.append({
-            'Pitcher': np.random.choice(pitchers),
-            'Batter': np.random.choice(batters),
-            'RelSpeed': np.random.normal(88, 5),
-            'InducedVertBreak': np.random.normal(0, 8),
-            'HorzBreak': np.random.normal(0, 8),
-            'SpinRate': np.random.normal(2200, 300),
-            'RelHeight': np.random.normal(6, 0.5),
-            'RelSide': np.random.normal(0, 0.3),
-            'run_value': np.random.normal(-0.05, 0.3),
-            'TaggedPitchType': np.random.choice(['Fastball', 'Slider', 'Changeup', 'Curveball']),
-            'PitchCall': np.random.choice(['BallCalled', 'StrikeSwinging', 'InPlay', 'StrikeCalled']),
-            'PlayResult': np.random.choice(['Out', 'Single', 'Double', 'Triple', 'HomeRun', None]),
-            'KorBB': np.random.choice(['Strikeout', 'Walk', None, None, None]),
-            'ExitSpeed': np.random.normal(85, 10),
-            'Angle': np.random.normal(15, 20),
-            'PlateLocSide': np.random.normal(0, 1),
-            'PlateLocHeight': np.random.normal(2.5, 0.8),
-            'wOBA_result': np.random.uniform(0, 2)
-        })
-    
-    return pd.DataFrame(data)
+# Initialize database manager
+@st.cache_resource
+def get_database_manager():
+    return DatabaseManager()
 
-def clean_numeric_column(series):
-    """Convert a series to numeric, replacing non-numeric values with NaN"""
-    return pd.to_numeric(series, errors='coerce')
-
-def run_mac_analysis(pitcher_name, target_hitters, df_all):
-    """Run MAC analysis on the data"""
+def run_mac_analysis_efficient(pitcher_name, target_hitters, db_manager):
+    """Memory-efficient MAC analysis using database queries"""
     
-    # Filter for relevant data
-    df = df_all.copy()
+    # Get only the data we need
+    df = db_manager.get_matchup_data(pitcher_name, target_hitters)
+    
+    if df.empty:
+        return None, None, None
     
     # Get pitcher's data for clustering
     pitcher_pitches = df[df["Pitcher"] == pitcher_name].copy()
-    if pitcher_pitches.empty:
+    if len(pitcher_pitches) < 10:
+        st.warning(f"Insufficient data for pitcher {pitcher_name} ({len(pitcher_pitches)} pitches)")
         return None, None, None
     
-    # Clean numeric columns
-    numeric_columns = [
-        'RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide',
-        'run_value', 'ExitSpeed', 'Angle', 'PlateLocHeight', 'PlateLocSide'
-    ]
-    
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = clean_numeric_column(df[col])
-            pitcher_pitches[col] = clean_numeric_column(pitcher_pitches[col])
-    
     # Add wOBA if missing
-    if 'wOBA_result' not in df.columns:
+    if 'wOBA_result' not in df.columns or df['wOBA_result'].isna().all():
         df['wOBA_result'] = 0.0
         woba_weights = {
             'Walk': 0.673, 'HitByPitch': 0.718, 'Single': 0.949,
             'Double': 1.483, 'Triple': 1.963, 'HomeRun': 2.571
         }
         
-        if 'KorBB' in df.columns:
-            df.loc[df['KorBB'] == 'Walk', 'wOBA_result'] = woba_weights['Walk']
-        if 'PitchCall' in df.columns:
-            df.loc[df['PitchCall'] == 'HitByPitch', 'wOBA_result'] = woba_weights['HitByPitch']
-        if 'PlayResult' in df.columns:
-            for result, weight in woba_weights.items():
-                if result in ['Single', 'Double', 'Triple', 'HomeRun']:
-                    df.loc[df['PlayResult'] == result, 'wOBA_result'] = weight
+        for result, weight in woba_weights.items():
+            if result == 'Walk':
+                df.loc[df['KorBB'] == 'Walk', 'wOBA_result'] = weight
+            elif result == 'HitByPitch':
+                df.loc[df['PitchCall'] == 'HitByPitch', 'wOBA_result'] = weight
+            elif result in ['Single', 'Double', 'Triple', 'HomeRun']:
+                df.loc[df['PlayResult'] == result, 'wOBA_result'] = weight
     
-    # Feature sets
-    scanning_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide']
+    # Clustering features
     clustering_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate']
-    
-    # Drop rows with missing critical data
-    df = df.dropna(subset=scanning_features + ["Pitcher", "Batter"])
-    pitcher_pitches = pitcher_pitches.dropna(subset=scanning_features + ["Pitcher", "Batter"])
-    
-    if len(pitcher_pitches) < 10:
-        st.warning(f"Not enough data for pitcher {pitcher_name} ({len(pitcher_pitches)} pitches)")
-        return None, None, None
+    scanning_features = clustering_features + ['RelHeight', 'RelSide']
     
     # Cluster pitcher's arsenal
     scaler = StandardScaler()
     X_cluster = scaler.fit_transform(pitcher_pitches[clustering_features])
     
     # Find optimal clusters
-    max_k = min(6, len(pitcher_pitches) // 5 + 1)
+    max_k = min(6, len(pitcher_pitches) // 10 + 1)
     if max_k < 2:
         optimal_k = 1
+        pitcher_pitches['PitchCluster'] = 0
     else:
         bic_scores = []
         ks = range(1, max_k)
         for k in ks:
-            gmm = GaussianMixture(n_components=k, random_state=42)
+            gmm = GaussianMixture(n_components=k, random_state=42, max_iter=50)
             gmm.fit(X_cluster)
             bic_scores.append(gmm.bic(X_cluster))
         
         knee = KneeLocator(ks, bic_scores, curve='convex', direction='decreasing')
         optimal_k = knee.elbow or 2
-    
-    # Fit final model
-    best_gmm = GaussianMixture(n_components=optimal_k, random_state=42)
-    pitcher_pitches['PitchCluster'] = best_gmm.fit_predict(X_cluster)
+        
+        # Fit final model
+        best_gmm = GaussianMixture(n_components=optimal_k, random_state=42, max_iter=50)
+        pitcher_pitches['PitchCluster'] = best_gmm.fit_predict(X_cluster)
     
     # Assign pitch groups
     autopitchtype_to_group = {
@@ -193,57 +256,82 @@ def run_mac_analysis(pitcher_name, target_hitters, df_all):
     
     # Map clusters to pitch groups
     cluster_to_type = {}
-    for cluster in pitcher_pitches['PitchCluster'].unique():
-        cluster_data = pitcher_pitches[pitcher_pitches['PitchCluster'] == cluster]
-        if 'TaggedPitchType' in cluster_data.columns:
-            type_counts = cluster_data['TaggedPitchType'].value_counts()
-            if not type_counts.empty:
-                most_common_type = type_counts.idxmax()
-                pitch_group = autopitchtype_to_group.get(most_common_type, 'Unknown')
-                cluster_to_type[cluster] = pitch_group
+    if optimal_k == 1:
+        # Single cluster case
+        if 'TaggedPitchType' in pitcher_pitches.columns:
+            most_common_type = pitcher_pitches['TaggedPitchType'].mode()
+            if len(most_common_type) > 0:
+                pitch_group = autopitchtype_to_group.get(most_common_type.iloc[0], 'Unknown')
             else:
-                cluster_to_type[cluster] = 'Unknown'
+                pitch_group = 'Unknown'
         else:
-            cluster_to_type[cluster] = 'Unknown'
+            pitch_group = 'Unknown'
+        cluster_to_type[0] = pitch_group
+    else:
+        for cluster in range(optimal_k):
+            cluster_data = pitcher_pitches[pitcher_pitches['PitchCluster'] == cluster]
+            if len(cluster_data) > 0 and 'TaggedPitchType' in cluster_data.columns:
+                type_counts = cluster_data['TaggedPitchType'].value_counts()
+                if not type_counts.empty:
+                    most_common_type = type_counts.idxmax()
+                    pitch_group = autopitchtype_to_group.get(most_common_type, 'Unknown')
+                else:
+                    pitch_group = 'Unknown'
+            else:
+                pitch_group = 'Unknown'
+            cluster_to_type[cluster] = pitch_group
     
     pitcher_pitches['PitchGroup'] = pitcher_pitches['PitchCluster'].map(cluster_to_type)
     
     # Calculate pitch group usage
     pitch_group_usage = pitcher_pitches['PitchGroup'].value_counts(normalize=True).to_dict()
     
-    # Tag full dataset with similarity to pitcher
+    # Calculate similarity for full dataset (memory efficient)
     from sklearn.metrics.pairwise import euclidean_distances
+    
+    # Process in smaller batches to avoid memory issues
+    batch_size = 1000
+    df['MinDistToPitcher'] = np.inf
+    
     scaler_all = StandardScaler()
-    df_scaled = scaler_all.fit_transform(df[scanning_features])
-    X_pitcher_full = scaler_all.transform(pitcher_pitches[scanning_features])
-    distances = euclidean_distances(df_scaled, X_pitcher_full)
-    df['MinDistToPitcher'] = distances.min(axis=1)
+    pitcher_scaled = scaler_all.fit_transform(pitcher_pitches[scanning_features])
+    
+    for i in range(0, len(df), batch_size):
+        batch = df.iloc[i:i+batch_size]
+        batch_scaled = scaler_all.transform(batch[scanning_features])
+        distances = euclidean_distances(batch_scaled, pitcher_scaled)
+        df.iloc[i:i+batch_size, df.columns.get_loc('MinDistToPitcher')] = distances.min(axis=1)
     
     # Assign pitch groups to full dataset
-    df_subset_scaled = scaler.transform(df[clustering_features])
-    df['PitchCluster'] = best_gmm.predict(df_subset_scaled)
+    if optimal_k > 1:
+        df_scaled = scaler.transform(df[clustering_features])
+        df['PitchCluster'] = best_gmm.predict(df_scaled)
+    else:
+        df['PitchCluster'] = 0
+    
     df['PitchGroup'] = df['PitchCluster'].map(cluster_to_type)
     
     # Perform matchup analysis
     results = []
     group_breakdown = []
     
+    swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
+    
     for hitter in target_hitters:
         hitter_result = {"Batter": hitter}
         weighted_stats = []
         total_weight = 0
         
-        # Aggregated stats for summary
         total_pitches_seen = 0
-        total_swings_seen = 0
         total_whiffs_seen = 0
+        total_swings_seen = 0
         total_hits = 0
         total_outs = 0
         total_woba_num = 0
         total_woba_den = 0
         
         for group, usage in pitch_group_usage.items():
-            # Get matchup data
+            # Get matchup data for this pitch group
             group_pitches = df[
                 (df["Batter"] == hitter) &
                 (df["PitchGroup"] == group) &
@@ -258,24 +346,15 @@ def run_mac_analysis(pitcher_name, target_hitters, df_all):
             total_run_value = group_pitches["run_value"].sum()
             rv_per_100 = 100 * total_run_value / total_pitches if total_pitches > 0 else 0
             
-            # Calculate other stats
+            # Other stats
             swings = group_pitches["PitchCall"].isin(swing_calls).sum()
             whiffs = (group_pitches["PitchCall"] == "StrikeSwinging").sum()
             
-            # Hits and outs for AVG
-            if 'PlayResult' in group_pitches.columns:
-                hits = group_pitches["PlayResult"].isin(["Single", "Double", "Triple", "HomeRun"]).sum()
-            else:
-                hits = 0
+            # Hits and outs
+            hits = group_pitches["PlayResult"].isin(["Single", "Double", "Triple", "HomeRun"]).sum() if 'PlayResult' in group_pitches.columns else 0
+            strikeouts = (group_pitches["KorBB"] == "Strikeout").sum() if 'KorBB' in group_pitches.columns else 0
             
-            if 'KorBB' in group_pitches.columns:
-                strikeouts = (group_pitches["KorBB"] == "Strikeout").sum()
-            else:
-                strikeouts = 0
-            
-            outs = strikeouts  # Simplified
-            
-            # wOBA calculation
+            # wOBA
             woba_num = group_pitches["wOBA_result"].sum()
             woba_den = total_pitches
             
@@ -284,7 +363,7 @@ def run_mac_analysis(pitcher_name, target_hitters, df_all):
             total_swings_seen += swings
             total_whiffs_seen += whiffs
             total_hits += hits
-            total_outs += outs
+            total_outs += strikeouts
             total_woba_num += woba_num
             total_woba_den += woba_den
             
@@ -301,7 +380,7 @@ def run_mac_analysis(pitcher_name, target_hitters, df_all):
                 "Usage": round(usage * 100, 1)
             })
         
-        # Summary stats
+        # Summary
         weighted_rv = sum(weighted_stats) / total_weight if total_weight > 0 else 0
         hitter_result["RV/100"] = round(weighted_rv, 2)
         hitter_result["Pitches"] = total_pitches_seen
@@ -353,32 +432,45 @@ def create_visualization(summary_df, breakdown_df, pitcher_name):
     return fig
 
 def main():
-    st.title("⚾ MAC Baseball Matchup Calculator")
-    st.markdown("**Machup Analysis Calculator** - Analyze pitcher vs hitter matchups using advanced metrics")
+    st.title("⚾ MAC Baseball Analytics")
+    st.markdown("**Memory-Efficient Version** - Using SQLite database for optimal performance")
     
-    # Sidebar
+    # Initialize database
+    try:
+        db_manager = get_database_manager()
+    except Exception as e:
+        st.error(f"❌ Could not initialize database: {e}")
+        st.stop()
+    
+    # Sidebar info
     with st.sidebar:
-        st.header("📊 Dataset Info")
-        if st.button("🔄 Reload Data"):
-            st.cache_data.clear()
+        st.header("🗄️ Database Info")
+        if os.path.exists("baseball_data.db"):
+            db_size = os.path.getsize("baseball_data.db") / 1024**2
+            st.metric("Database Size", f"{db_size:.1f}MB")
+            st.success("✅ Database ready")
+        
+        if st.button("🔄 Refresh Database"):
+            if os.path.exists("baseball_data.db"):
+                os.remove("baseball_data.db")
+            st.cache_resource.clear()
             st.rerun()
     
-    # Load data
-    with st.spinner("Loading baseball data..."):
-        df_all = load_data_from_dropbox()
+    # Get available options
+    with st.spinner("Loading available players..."):
+        try:
+            available_pitchers = db_manager.get_pitchers()
+            available_batters = db_manager.get_batters()
+        except Exception as e:
+            st.error(f"❌ Error loading players: {e}")
+            st.stop()
     
-    if df_all.empty:
-        st.error("Could not load data")
-        return
-    
-    # Dataset info
-    col1, col2, col3 = st.columns(3)
+    # Display stats
+    col1, col2 = st.columns(2)
     with col1:
-        st.metric("Total Pitches", f"{len(df_all):,}")
+        st.metric("Available Pitchers", len(available_pitchers))
     with col2:
-        st.metric("Pitchers", f"{df_all['Pitcher'].nunique():,}")
-    with col3:
-        st.metric("Batters", f"{df_all['Batter'].nunique():,}")
+        st.metric("Available Batters", len(available_batters))
     
     st.markdown("---")
     
@@ -387,7 +479,6 @@ def main():
     
     with col1:
         st.subheader("🥎 Select Pitcher")
-        available_pitchers = sorted(df_all['Pitcher'].dropna().unique())
         selected_pitcher = st.selectbox(
             "Choose a pitcher:",
             available_pitchers,
@@ -396,29 +487,29 @@ def main():
     
     with col2:
         st.subheader("🏏 Select Hitters")
-        available_hitters = sorted(df_all['Batter'].dropna().unique())
         selected_hitters = st.multiselect(
             "Choose hitters:",
-            available_hitters,
-            default=available_hitters[:5] if len(available_hitters) >= 5 else available_hitters
+            available_batters,
+            default=available_batters[:3] if len(available_batters) >= 3 else available_batters[:1]
         )
     
-    # Analysis button
+    # Analysis
     if st.button("🚀 Run MAC Analysis", type="primary", use_container_width=True):
         if not selected_pitcher or not selected_hitters:
             st.warning("Please select both a pitcher and at least one hitter.")
             return
         
         with st.spinner(f"Analyzing {selected_pitcher} vs {len(selected_hitters)} hitters..."):
-            summary_df, breakdown_df, analyzed_df = run_mac_analysis(
-                selected_pitcher, selected_hitters, df_all
-            )
+            try:
+                summary_df, breakdown_df, _ = run_mac_analysis_efficient(
+                    selected_pitcher, selected_hitters, db_manager
+                )
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {e}")
+                return
         
         if summary_df is not None and not summary_df.empty:
             st.success("✅ Analysis complete!")
-            
-            # Results
-            st.subheader("📊 Matchup Results")
             
             # Visualization
             fig = create_visualization(summary_df, breakdown_df, selected_pitcher)
@@ -435,28 +526,26 @@ def main():
                 st.subheader("Pitch Group Breakdown")
                 st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
             
-            # Download
-            csv_summary = summary_df.to_csv(index=False)
-            csv_breakdown = breakdown_df.to_csv(index=False)
-            
+            # Downloads
             col1, col2 = st.columns(2)
             with col1:
+                csv_summary = summary_df.to_csv(index=False)
                 st.download_button(
-                    "📥 Download Summary CSV",
+                    "📥 Download Summary",
                     csv_summary,
                     f"{selected_pitcher.replace(', ', '_')}_summary.csv",
                     "text/csv"
                 )
             with col2:
+                csv_breakdown = breakdown_df.to_csv(index=False)
                 st.download_button(
-                    "📥 Download Breakdown CSV", 
+                    "📥 Download Breakdown",
                     csv_breakdown,
                     f"{selected_pitcher.replace(', ', '_')}_breakdown.csv",
                     "text/csv"
                 )
-        
         else:
-            st.warning("No sufficient data found for this matchup.")
+            st.warning("❌ No sufficient data found for this matchup.")
 
 if __name__ == "__main__":
     main()
