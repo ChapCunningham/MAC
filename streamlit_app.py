@@ -705,19 +705,21 @@ def create_comprehensive_visualization(summary_df, breakdown_df, pitcher_name):
         ))
     
     # Add horizontal dashed lines for 25th and 75th percentiles
+    # 25th percentile = lower RV/100 = worse for hitters = green
     fig.add_hline(
         y=percentile_25,
         line_dash="dash",
-        line_color="red",
+        line_color="green",
         line_width=2,
         annotation_text=f"25th Percentile (RV/100: {percentile_25:.2f})",
         annotation_position="bottom right"
     )
     
+    # 75th percentile = higher RV/100 = better for hitters = red
     fig.add_hline(
         y=percentile_75,
         line_dash="dash",
-        line_color="green",
+        line_color="red",
         line_width=2,
         annotation_text=f"75th Percentile (RV/100: {percentile_75:.2f})",
         annotation_position="top right"
@@ -736,23 +738,25 @@ def create_comprehensive_visualization(summary_df, breakdown_df, pitcher_name):
         )
     )
     
-    # Add annotations for better/worse indicators
+    # Add annotations for better/worse indicators positioned like y-axis labels
     fig.add_annotation(
         xref="paper", yref="y",
-        x=1.02, y=summary_df["RV/100"].max() + 1 if not summary_df.empty else 5,
-        text="↑ Better for Hitters",
+        x=-0.1, y=summary_df["RV/100"].max() + 1 if not summary_df.empty else 5,
+        text="Better for Hitters",
         showarrow=False,
-        font=dict(size=20, color="green"),
-        align="left"
+        font=dict(size=14, color="red"),
+        align="center",
+        textangle=90  # Rotate text vertically like y-axis label
     )
     
     fig.add_annotation(
         xref="paper", yref="y",
-        x=1.02, y=summary_df["RV/100"].min() - 1 if not summary_df.empty else -5,
-        text="↓ Worse for Hitters",
+        x=-0.1, y=summary_df["RV/100"].min() - 1 if not summary_df.empty else -5,
+        text="Worse for Hitters",
         showarrow=False,
-        font=dict(size=20, color="red"),
-        align="left"
+        font=dict(size=14, color="green"),
+        align="center",
+        textangle=90  # Rotate text vertically like y-axis label
     )
     
     return fig
