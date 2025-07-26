@@ -180,16 +180,21 @@ class DatabaseManager:
         
         params = [pitcher_name] + target_hitters
         
-        # Read in chunks to manage memory
-        chunk_size = 10000
-        chunks = []
+        # Try chunked reading, fall back to regular if not supported
+        try:
+            # Read in chunks to manage memory
+            chunk_size = 10000
+            chunks = []
+            
+            for chunk in pd.read_sql_query(query, conn, params=params, chunksize=chunk_size):
+                chunks.append(chunk)
+            
+            df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+        except TypeError:
+            # chunksize not supported in some pandas versions, read all at once
+            df = pd.read_sql_query(query, conn, params=params)
         
-        for chunk in pd.read_sql_query(query, conn, params=params, chunksize=chunk_size):
-            chunks.append(chunk)
-        
-        df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
         conn.close()
-        
         return df
 
 def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
