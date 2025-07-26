@@ -872,6 +872,19 @@ def main():
             st.markdown("---")
             st.header("📊 Results")
             
+            # Store results in session state for persistence
+            st.session_state.summary_df = summary_df
+            st.session_state.breakdown_df = breakdown_df
+            st.session_state.selected_pitcher = selected_pitcher
+            st.session_state.selected_hitters = selected_hitters
+            
+            # Filter movement data for charts and store in session state
+            movement_df = full_df[
+                (full_df["Batter"].isin(selected_hitters)) &
+                (full_df["MinDistToPitcher"] <= distance_threshold)
+            ].copy()
+            st.session_state.movement_df = movement_df
+            
             # Main visualization
             fig = create_comprehensive_visualization(summary_df, breakdown_df, selected_pitcher)
             st.plotly_chart(fig, use_container_width=True)
@@ -887,125 +900,118 @@ def main():
                 st.subheader("🎯 Pitch Group Breakdown")
                 st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
             
-            # Filter movement data for charts
-            movement_df = full_df[
-                (full_df["Batter"].isin(selected_hitters)) &
-                (full_df["MinDistToPitcher"] <= distance_threshold)
-            ].copy()
-            
             # Movement chart
             st.subheader("🌪️ Pitch Movement Chart")
             movement_fig = create_movement_chart(movement_df)
             st.plotly_chart(movement_fig, use_container_width=True)
-            
-            # Zone analysis
-            st.subheader("🎯 Zone-Level Heat Map Analysis")
-            selected_hitter_heatmap = st.selectbox(
-                "Select hitter for detailed zone analysis:",
-                selected_hitters,
-                key="heatmap_hitter"
-            )
-            
-            # Store movement data in session state for heatmap reactivity
-            if 'movement_data' not in st.session_state:
-                st.session_state.movement_data = movement_df
-            
-            if selected_hitter_heatmap:
-                # This should update immediately when dropdown changes
-                hitter_data = st.session_state.movement_data[
-                    st.session_state.movement_data["Batter"] == selected_hitter_heatmap
-                ].copy()
-                
-                if not hitter_data.empty:
-                    with st.spinner(f"Generating zone heatmap for {selected_hitter_heatmap}..."):
-                        heatmap_img = generate_zone_heatmap(hitter_data, selected_hitter_heatmap)
-                        st.markdown(f"<img src='{heatmap_img}' style='width: 100%; max-width: 1200px;'>", 
-                                  unsafe_allow_html=True)
-                else:
-                    st.warning(f"No data available for {selected_hitter_heatmap} zone analysis.")
-            
-            # Coverage analysis
-            st.subheader("📈 Coverage Matrix")
-            coverage_matrix = pd.DataFrame(
-                index=selected_hitters, 
-                columns=["Fastball", "Breaking", "Offspeed"]
-            ).fillna(0)
-            
-            for hitter in selected_hitters:
-                for group in ["Fastball", "Breaking", "Offspeed"]:
-                    matches = movement_df[
-                        (movement_df["Batter"] == hitter) &
-                        (movement_df["PitchGroup"] == group)
-                    ]
-                    coverage_matrix.loc[hitter, group] = len(matches)
-            
-            st.dataframe(coverage_matrix.astype(int), use_container_width=True)
-            st.info("📊 Coverage Matrix shows pitch counts within distance threshold for each hitter vs pitch group combination")
-            
-            # Downloads
-            st.subheader("💾 Download Results")
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                csv_summary = summary_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Summary",
-                    csv_summary,
-                    f"{selected_pitcher.replace(', ', '_')}_summary.csv",
-                    "text/csv"
-                )
-            
-            with col2:
-                csv_breakdown = breakdown_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Breakdown",
-                    csv_breakdown,
-                    f"{selected_pitcher.replace(', ', '_')}_breakdown.csv",
-                    "text/csv"
-                )
-            
-            with col3:
-                csv_movement = movement_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Pitch Data",
-                    csv_movement,
-                    f"{selected_pitcher.replace(', ', '_')}_pitch_level.csv",
-                    "text/csv"
-                )
-            
-            # Analysis insights
-            st.subheader("🔍 Analysis Insights")
-            
-            # Calculate insights
-            best_matchup = summary_df.loc[summary_df["RV/100"].idxmin(), "Batter"] if not summary_df.empty else "N/A"
-            worst_matchup = summary_df.loc[summary_df["RV/100"].idxmax(), "Batter"] if not summary_df.empty else "N/A"
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric(
-                    "Best Matchup (Pitcher)",
-                    best_matchup,
-                    f"RV/100: {summary_df['RV/100'].min():.2f}" if not summary_df.empty else "N/A"
-                )
-            
-            with col2:
-                st.metric(
-                    "Worst Matchup (Pitcher)",
-                    worst_matchup,
-                    f"RV/100: {summary_df['RV/100'].max():.2f}" if not summary_df.empty else "N/A"
-                )
-            
-            with col3:
-                avg_rv = summary_df["RV/100"].mean() if not summary_df.empty else 0
-                st.metric(
-                    "Average RV/100",
-                    f"{avg_rv:.2f}",
-                    "Lower is better for pitcher"
-                )
         
         else:
             st.warning("❌ No sufficient data found for this matchup.")
+    
+    # Zone analysis - OUTSIDE the button block so it persists
+    if 'movement_df' in st.session_state and 'selected_hitters' in st.session_state:
+        st.subheader("🎯 Zone-Level Heat Map Analysis")
+        selected_hitter_heatmap = st.selectbox(
+            "Select hitter for detailed zone analysis:",
+            st.session_state.selected_hitters,
+            key="heatmap_hitter"
+        )
+        
+        if selected_hitter_heatmap:
+            # This should update immediately when dropdown changes
+            hitter_data = st.session_state.movement_df[
+                st.session_state.movement_df["Batter"] == selected_hitter_heatmap
+            ].copy()
+            
+            if not hitter_data.empty:
+                with st.spinner(f"Generating zone heatmap for {selected_hitter_heatmap}..."):
+                    heatmap_img = generate_zone_heatmap(hitter_data, selected_hitter_heatmap)
+                    st.markdown(f"<img src='{heatmap_img}' style='width: 100%; max-width: 1200px;'>", 
+                              unsafe_allow_html=True)
+            else:
+                st.warning(f"No data available for {selected_hitter_heatmap} zone analysis.")
+    
+    # Coverage analysis and downloads - also outside button block for persistence
+    if 'movement_df' in st.session_state and 'summary_df' in st.session_state:
+        # Coverage analysis
+        st.subheader("📈 Coverage Matrix")
+        coverage_matrix = pd.DataFrame(
+            index=st.session_state.selected_hitters, 
+            columns=["Fastball", "Breaking", "Offspeed"]
+        ).fillna(0)
+        
+        for hitter in st.session_state.selected_hitters:
+            for group in ["Fastball", "Breaking", "Offspeed"]:
+                matches = st.session_state.movement_df[
+                    (st.session_state.movement_df["Batter"] == hitter) &
+                    (st.session_state.movement_df["PitchGroup"] == group)
+                ]
+                coverage_matrix.loc[hitter, group] = len(matches)
+        
+        st.dataframe(coverage_matrix.astype(int), use_container_width=True)
+        st.info("📊 Coverage Matrix shows pitch counts within distance threshold for each hitter vs pitch group combination")
+        
+        # Downloads
+        st.subheader("💾 Download Results")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            csv_summary = st.session_state.summary_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Summary",
+                csv_summary,
+                f"{st.session_state.selected_pitcher.replace(', ', '_')}_summary.csv",
+                "text/csv"
+            )
+        
+        with col2:
+            csv_breakdown = st.session_state.breakdown_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Breakdown",
+                csv_breakdown,
+                f"{st.session_state.selected_pitcher.replace(', ', '_')}_breakdown.csv",
+                "text/csv"
+            )
+        
+        with col3:
+            csv_movement = st.session_state.movement_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Pitch Data",
+                csv_movement,
+                f"{st.session_state.selected_pitcher.replace(', ', '_')}_pitch_level.csv",
+                "text/csv"
+            )
+        
+        # Analysis insights
+        st.subheader("🔍 Analysis Insights")
+        
+        # Calculate insights
+        best_matchup = st.session_state.summary_df.loc[st.session_state.summary_df["RV/100"].idxmin(), "Batter"] if not st.session_state.summary_df.empty else "N/A"
+        worst_matchup = st.session_state.summary_df.loc[st.session_state.summary_df["RV/100"].idxmax(), "Batter"] if not st.session_state.summary_df.empty else "N/A"
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Best Matchup (Pitcher)",
+                best_matchup,
+                f"RV/100: {st.session_state.summary_df['RV/100'].min():.2f}" if not st.session_state.summary_df.empty else "N/A"
+            )
+        
+        with col2:
+            st.metric(
+                "Worst Matchup (Pitcher)",
+                worst_matchup,
+                f"RV/100: {st.session_state.summary_df['RV/100'].max():.2f}" if not st.session_state.summary_df.empty else "N/A"
+            )
+        
+        with col3:
+            avg_rv = st.session_state.summary_df["RV/100"].mean() if not st.session_state.summary_df.empty else 0
+            st.metric(
+                "Average RV/100",
+                f"{avg_rv:.2f}",
+                "Lower is better for pitcher"
+            )
 
 if __name__ == "__main__":
     main()
