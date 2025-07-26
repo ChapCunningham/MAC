@@ -866,7 +866,7 @@ def main():
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("🥎 Select Pitcher")
+        st.subheader("Select Pitcher")
         selected_pitcher = st.selectbox(
             "Choose a pitcher:",
             available_pitchers,
@@ -874,7 +874,7 @@ def main():
         )
     
     with col2:
-        st.subheader("🏏 Select Hitters")
+        st.subheader("Select Hitters")
         selected_hitters = st.multiselect(
             "Choose hitters:",
             available_batters,
