@@ -639,8 +639,17 @@ def generate_zone_heatmap(df, selected_hitter):
     return f"data:image/png;base64,{encoded}"
 
 def create_comprehensive_visualization(summary_df, breakdown_df, pitcher_name):
-    """Create comprehensive visualization matching the Dash app style"""
+    """Create comprehensive visualization matching the Dash app style with percentile lines"""
     fig = make_subplots(rows=1, cols=1)
+    
+    # Calculate 25th and 75th percentiles from summary data
+    if not summary_df.empty and 'RV/100' in summary_df.columns:
+        percentile_25 = summary_df['RV/100'].quantile(0.25)
+        percentile_75 = summary_df['RV/100'].quantile(0.75)
+    else:
+        # Fallback values if no data
+        percentile_25 = -2
+        percentile_75 = 2
     
     # Add summary points with comprehensive hover info
     for _, row in summary_df.iterrows():
@@ -694,6 +703,25 @@ def create_comprehensive_visualization(summary_df, breakdown_df, pitcher_name):
             ),
             showlegend=False
         ))
+    
+    # Add horizontal dashed lines for 25th and 75th percentiles
+    fig.add_hline(
+        y=percentile_25,
+        line_dash="dash",
+        line_color="red",
+        line_width=2,
+        annotation_text=f"25th Percentile (RV/100: {percentile_25:.2f})",
+        annotation_position="bottom right"
+    )
+    
+    fig.add_hline(
+        y=percentile_75,
+        line_dash="dash",
+        line_color="green",
+        line_width=2,
+        annotation_text=f"75th Percentile (RV/100: {percentile_75:.2f})",
+        annotation_position="top right"
+    )
     
     fig.update_layout(
         height=700,
