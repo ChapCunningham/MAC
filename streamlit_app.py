@@ -906,17 +906,23 @@ def main():
                 key="heatmap_hitter"
             )
             
+            # Store movement data in session state for heatmap reactivity
+            if 'movement_data' not in st.session_state:
+                st.session_state.movement_data = movement_df
+            
             if selected_hitter_heatmap:
-                with st.spinner(f"Generating zone heatmap for {selected_hitter_heatmap}..."):
-                    # Filter data for selected hitter
-                    hitter_data = movement_df[movement_df["Batter"] == selected_hitter_heatmap].copy()
-                    
-                    if not hitter_data.empty:
+                # This should update immediately when dropdown changes
+                hitter_data = st.session_state.movement_data[
+                    st.session_state.movement_data["Batter"] == selected_hitter_heatmap
+                ].copy()
+                
+                if not hitter_data.empty:
+                    with st.spinner(f"Generating zone heatmap for {selected_hitter_heatmap}..."):
                         heatmap_img = generate_zone_heatmap(hitter_data, selected_hitter_heatmap)
                         st.markdown(f"<img src='{heatmap_img}' style='width: 100%; max-width: 1200px;'>", 
                                   unsafe_allow_html=True)
-                    else:
-                        st.warning(f"No data available for {selected_hitter_heatmap} zone analysis.")
+                else:
+                    st.warning(f"No data available for {selected_hitter_heatmap} zone analysis.")
             
             # Coverage analysis
             st.subheader("📈 Coverage Matrix")
