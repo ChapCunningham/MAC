@@ -728,7 +728,7 @@ def create_comprehensive_visualization(summary_df, breakdown_df, pitcher_name):
     fig.update_layout(
         height=700,
         title=f"Expected Matchup RV/100 + Hitter Summary: {pitcher_name} - - - Note that the black indicates expected weighted performance and the red, blue, and green dots represent fastballs, breaking balls, and offspeed, respectively",
-        yaxis_title="RV/100",
+        yaxis_title="Better for Pitchers <------    RV/100   ------> Better for Hitters",
         template="simple_white",
         xaxis=dict(
             tickmode="array",
