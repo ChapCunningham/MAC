@@ -516,6 +516,262 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     
     return pd.DataFrame(results), pd.DataFrame(group_breakdown), df
 
+def run_silent_mac_analysis(pitcher_name, target_hitters, db_manager):
+    """Silent MAC analysis - no verbose output for Hot Arms batch processing"""
+    
+    # === STEP 1: Get Data ===
+    df = db_manager.get_analysis_data(pitcher_name, target_hitters)
+    
+    if df.empty:
+        return None, None, None
+    
+    # Filter for pitcher's data only for clustering
+    pitcher_pitches = df[df["Pitcher"] == pitcher_name].copy()
+    if pitcher_pitches.empty:
+        return None, None, None
+    
+    # === STEP 2: Clean Numeric Columns ===
+    numeric_columns = [
+        'RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide',
+        'run_value', 'RunsScored', 'OutsOnPlay', 'ExitSpeed', 'Angle', 'PlateLocHeight', 'PlateLocSide'
+    ]
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = clean_numeric_column(df[col])
+    
+    # Check for required columns
+    required_cols = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide', 'TaggedPitchType']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        return None, None, None
+    
+    # === STEP 3: League Environment ===
+    LEAGUE_R_OUT = 0.193
+    
+    # === STEP 4: Assign wOBA result values ===
+    if 'wOBA_result' not in df.columns:
+        df['wOBA_result'] = 0.0
+        df.loc[df['KorBB'] == 'Walk', 'wOBA_result'] = woba_weights['Walk']
+        df.loc[df['PitchCall'] == 'HitByPitch', 'wOBA_result'] = woba_weights['HitByPitch']
+        df.loc[df['PlayResult'] == 'Single', 'wOBA_result'] = woba_weights['Single']
+        df.loc[df['PlayResult'] == 'Double', 'wOBA_result'] = woba_weights['Double']
+        df.loc[df['PlayResult'] == 'Triple', 'wOBA_result'] = woba_weights['Triple']
+        df.loc[df['PlayResult'] == 'HomeRun', 'wOBA_result'] = woba_weights['HomeRun']
+    else:
+        df['wOBA_result'] = clean_numeric_column(df['wOBA_result'])
+    
+    # === STEP 5: Feature sets ===
+    scanning_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide']
+    clustering_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate']
+    
+    df = df.dropna(subset=scanning_features + ["Pitcher", "Batter"])
+    pitcher_pitches = pitcher_pitches.dropna(subset=scanning_features + ["Pitcher", "Batter"])
+    
+    # === STEP 6: Scale features and cluster pitcher's arsenal ===
+    StandardScaler, GaussianMixture, euclidean_distances, KneeLocator = get_sklearn_components()
+    
+    scaler = StandardScaler()
+    X_cluster = scaler.fit_transform(pitcher_pitches[clustering_features])
+    
+    # BIC loop to find optimal number of clusters
+    bic_scores = []
+    ks = range(1, 10)
+    for k in ks:
+        gmm = GaussianMixture(n_components=k, random_state=42)
+        gmm.fit(X_cluster)
+        bic_scores.append(gmm.bic(X_cluster))
+    
+    # Find the "elbow" (knee point)
+    knee = KneeLocator(ks, bic_scores, curve='convex', direction='decreasing')
+    optimal_k = knee.elbow or 2
+    
+    # Fit final GMM and assign cluster labels
+    best_gmm = GaussianMixture(n_components=optimal_k, random_state=42)
+    pitcher_pitches['PitchCluster'] = best_gmm.fit_predict(X_cluster)
+    
+    # === STEP 7: Assign PitchGroup using TaggedPitchType majority ===
+    autopitchtype_to_group = {
+        'Four-Seam': 'Fastball', 'Fastball': 'Fastball', 'FourSeamFastBall': 'Fastball',
+        'TwoSeamFastBall': 'Fastball', 'Sinker': 'Fastball', 'Slider': 'Breaking',
+        'Cutter': 'Breaking', 'Curveball': 'Breaking', 'Sweeper': 'Breaking',
+        'Changeup': 'Offspeed', 'Splitter': 'Offspeed', 'ChangeUp': 'Offspeed'
+    }
+    
+    pitcher_pitches = pitcher_pitches.dropna(subset=["TaggedPitchType"])
+    
+    cluster_to_type = {}
+    for cluster in pitcher_pitches['PitchCluster'].unique():
+        cluster_data = pitcher_pitches[pitcher_pitches['PitchCluster'] == cluster]
+        type_counts = cluster_data['TaggedPitchType'].value_counts()
+        
+        if type_counts.empty:
+            cluster_to_type[cluster] = 'Unknown'
+            continue
+        
+        most_common_type = type_counts.idxmax()
+        pitch_group = autopitchtype_to_group.get(most_common_type, 'Unknown')
+        cluster_to_type[cluster] = pitch_group
+    
+    pitcher_pitches['PitchGroup'] = pitcher_pitches['PitchCluster'].map(cluster_to_type)
+    pitch_group_usage = pitcher_pitches['PitchGroup'].value_counts(normalize=True).to_dict()
+    
+    # === STEP 8: Tag FULL dataset with MinDistToPitcher ===
+    scaler_all = StandardScaler()
+    df_scaled = scaler_all.fit_transform(df[scanning_features])
+    X_pitcher_full = scaler_all.transform(pitcher_pitches[scanning_features])
+    distances = euclidean_distances(df_scaled, X_pitcher_full)
+    df['MinDistToPitcher'] = distances.min(axis=1)
+    
+    # Assign PitchGroup to entire dataset using cluster model
+    df_subset_scaled = scaler.transform(df[clustering_features])
+    df['PitchCluster'] = best_gmm.predict(df_subset_scaled)
+    df['PitchGroup'] = df['PitchCluster'].map(cluster_to_type)
+    
+    # === STEP 9: Matchup scoring ===
+    results = []
+    group_breakdown = []
+    
+    for hitter in target_hitters:
+        hitter_result = {"Batter": hitter}
+        weighted_stats = []
+        total_weight = 0
+        
+        # Initialize accumulators for summary
+        total_pitches_seen = 0
+        total_swings_seen = 0
+        total_whiffs_seen = 0
+        total_ev_sum = 0
+        total_la_sum = 0
+        total_hard_hits = 0
+        total_gbs = 0
+        total_bips = 0
+        total_hits = 0
+        total_outs = 0
+        total_woba_num = 0
+        total_woba_den = 0
+        
+        for group, usage in pitch_group_usage.items():
+            group_pitches = df[
+                (df["Batter"] == hitter) &
+                (df["PitchGroup"] == group) &
+                (df["MinDistToPitcher"] <= distance_threshold)
+            ].copy()
+            
+            if group_pitches.empty:
+                continue
+            
+            # Clean plate location columns for zone calculation
+            group_pitches['PlateLocHeight'] = clean_numeric_column(group_pitches['PlateLocHeight'])
+            group_pitches['PlateLocSide'] = clean_numeric_column(group_pitches['PlateLocSide'])
+            
+            group_pitches["InZone"] = (
+                (group_pitches["PlateLocHeight"] >= strike_zone["bottom"]) &
+                (group_pitches["PlateLocHeight"] <= strike_zone["top"]) &
+                (group_pitches["PlateLocSide"] >= strike_zone["left"]) &
+                (group_pitches["PlateLocSide"] <= strike_zone["right"])
+            )
+            group_pitches["Swung"] = group_pitches["PitchCall"].isin(swing_calls)
+            group_pitches["Whiff"] = group_pitches["PitchCall"] == "StrikeSwinging"
+            group_pitches["IsInPlay"] = group_pitches['PitchCall'].isin(["InPlay"])
+            
+            total_pitches = len(group_pitches)
+            total_swings = group_pitches["Swung"].sum()
+            total_whiffs = group_pitches["Whiff"].sum()
+            total_run_value = group_pitches["run_value"].sum() if 'run_value' in group_pitches.columns else 0
+            
+            # Clean exit speed and angle columns
+            group_pitches['ExitSpeed'] = clean_numeric_column(group_pitches['ExitSpeed'])
+            group_pitches['Angle'] = clean_numeric_column(group_pitches['Angle'])
+            
+            exit_velo = group_pitches["ExitSpeed"].mean()
+            launch_angle = group_pitches["Angle"].mean()
+            
+            balls_in_play = group_pitches[group_pitches["IsInPlay"]]
+            num_ground_balls = (balls_in_play["Angle"] < 10).sum()
+            gb_percent = round(100 * num_ground_balls / len(balls_in_play), 1) if len(balls_in_play) > 0 else np.nan
+            num_hard_hits = (balls_in_play["ExitSpeed"] >= 95).sum()
+            hh_percent = round(100 * num_hard_hits / len(balls_in_play), 1) if len(balls_in_play) > 0 else np.nan
+            
+            rv_per_100 = 100 * total_run_value / total_pitches if total_pitches > 0 else 0
+            weighted_stats.append(usage * rv_per_100)
+            total_weight += usage
+            
+            # Calculate AVG for this group
+            hit_mask = (
+                (group_pitches["PitchCall"] == "InPlay") &
+                (group_pitches["PlayResult"].isin(["Single", "Double", "Triple", "HomeRun"]))
+            )
+            hits = hit_mask.sum()
+            
+            out_mask = (
+                ((group_pitches["KorBB"].isin(["Strikeout", "Walk"])) |
+                ((group_pitches["PitchCall"] == "InPlay") & (group_pitches["PlayResult"] == "Out"))) &
+                (group_pitches["PlayResult"] != "Sacrifice")
+            )
+            outs = out_mask.sum()
+            
+            avg = round(hits / (hits + outs), 3) if (hits + outs) > 0 else np.nan
+            
+            # Accumulate full pitch data for summary
+            total_pitches_seen += total_pitches
+            total_swings_seen += total_swings
+            total_whiffs_seen += total_whiffs
+            total_bips += len(balls_in_play)
+            total_hits += hits
+            total_outs += outs
+            if not np.isnan(exit_velo):
+                total_ev_sum += exit_velo * len(balls_in_play)
+            if not np.isnan(launch_angle):
+                total_la_sum += launch_angle * len(balls_in_play)
+            if not np.isnan(num_hard_hits):
+                total_hard_hits += num_hard_hits
+            if not np.isnan(num_ground_balls):
+                total_gbs += num_ground_balls
+            
+            # Compute wOBA for this group
+            plate_ending = group_pitches[
+                (group_pitches["KorBB"].isin(["Strikeout", "Walk"])) |
+                (group_pitches["PitchCall"].isin(["InPlay", "HitByPitch"]))
+            ]
+            
+            group_woba_numerator = plate_ending["wOBA_result"].sum()
+            group_woba_denominator = len(plate_ending)
+            group_woba = round(group_woba_numerator / group_woba_denominator, 3) if group_woba_denominator > 0 else np.nan
+            
+            # Accumulate for summary-level wOBA
+            total_woba_num += group_woba_numerator
+            total_woba_den += group_woba_denominator
+            
+            group_breakdown.append({
+                "Batter": hitter, "PitchGroup": group, "AVG": avg, "RV/100": round(rv_per_100, 2),
+                "Whiff%": round(100 * total_whiffs / total_swings, 1) if total_swings > 0 else np.nan,
+                "SwStr%": round(100 * total_whiffs / total_pitches, 1) if total_pitches > 0 else np.nan,
+                "HH%": hh_percent, "ExitVelo": round(exit_velo, 1) if not np.isnan(exit_velo) else np.nan,
+                "Launch": round(launch_angle, 1) if not np.isnan(launch_angle) else np.nan,
+                "GB%": gb_percent, "UsageWeight": round(usage, 2), "Pitches": total_pitches,
+                "InPlay": len(balls_in_play), "wOBA": group_woba,
+            })
+        
+        # Summary calculations
+        weighted_rv = sum(weighted_stats) / total_weight if total_weight > 0 else np.nan
+        hitter_result["RV/100"] = round(weighted_rv, 2)
+        hitter_result["AVG"] = round(total_hits / (total_hits + total_outs), 3) if (total_hits + total_outs) > 0 else np.nan
+        hitter_result["Whiff%"] = round(100 * total_whiffs_seen / total_swings_seen, 1) if total_swings_seen > 0 else np.nan
+        hitter_result["SwStr%"] = round(100 * total_whiffs_seen / total_pitches_seen, 1) if total_pitches_seen > 0 else np.nan
+        hitter_result["ExitVelo"] = round(total_ev_sum / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["Launch"] = round(total_la_sum / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["HH%"] = round(100 * total_hard_hits / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["GB%"] = round(100 * total_gbs / total_bips, 1) if total_bips > 0 else np.nan
+        hitter_result["Pitches"] = total_pitches_seen
+        hitter_result["InPlay"] = total_bips
+        hitter_result["wOBA"] = round(total_woba_num / total_woba_den, 3) if total_woba_den > 0 else np.nan
+        
+        results.append(hitter_result)
+    
+    return pd.DataFrame(results), pd.DataFrame(group_breakdown), df
+
+
 def compute_heatmap_stats(df, metric_col, min_samples=3):
     """Compute heatmap statistics for zone analysis"""
     valid = df[["PlateLocSide", "PlateLocHeight", metric_col]].dropna()
@@ -801,21 +1057,29 @@ def create_movement_chart(movement_df):
     return fig
     # Move these functions OUTSIDE of main() - place them after create_movement_chart()
 
+# Update the analyze_hot_arms_strategy function to use the silent version:
 def analyze_hot_arms_strategy(hot_arms, selected_hitters, db_manager):
-    """Analyze strategic matchups for available pitchers"""
+    """Analyze strategic matchups for available pitchers with minimal output"""
     if not hot_arms or not selected_hitters:
         return None, None
     
-    st.info(f"🔥 Analyzing {len(hot_arms)} hot arms vs {len(selected_hitters)} hitters...")
+    # Show clean progress
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
     # Store results for all pitcher-hitter combinations
     all_matchups = []
     pitcher_summaries = {}
     
-    for pitcher in hot_arms:
+    for i, pitcher in enumerate(hot_arms):
         try:
-            # Run MAC analysis for this pitcher (but suppress the verbose output)
-            summary_df, breakdown_df, _ = run_complete_mac_analysis(
+            # Update progress
+            progress = (i + 1) / len(hot_arms)
+            progress_bar.progress(progress)
+            status_text.text(f"🔥 Analyzing {pitcher} ({i+1}/{len(hot_arms)})")
+            
+            # Run SILENT MAC analysis for this pitcher
+            summary_df, breakdown_df, _ = run_silent_mac_analysis(
                 pitcher, selected_hitters, db_manager
             )
             
@@ -845,6 +1109,10 @@ def analyze_hot_arms_strategy(hot_arms, selected_hitters, db_manager):
         except Exception as e:
             st.warning(f"Could not analyze {pitcher}: {str(e)}")
             continue
+    
+    # Clean up progress indicators
+    progress_bar.empty()
+    status_text.empty()
     
     return pd.DataFrame(all_matchups), pitcher_summaries
 
