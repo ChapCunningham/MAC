@@ -239,15 +239,16 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     
     st.success("✅ Numeric columns cleaned and validated")
     
-    # === STEP 3: Compute League Run Environment for wOBA (EXACT SAME) ===
-    with st.spinner("⚾ Computing league run environment..."):
-        total_runs = df['RunsScored'].sum() if 'RunsScored' in df.columns else 0
-        strikeouts = (df['KorBB'] == 'Strikeout').sum() if 'KorBB' in df.columns else 0
-        outs_on_play = df['OutsOnPlay'].fillna(0).sum() if 'OutsOnPlay' in df.columns else 0
-        total_outs = strikeouts + outs_on_play
-        r_out = total_runs / total_outs if total_outs > 0 else 0
+    # USING CCBL R/OUT AS PREDEFINED - previously was FINDING r/out AFTER filtering for batter/pitcher matchup (invalid approach!)
+    LEAGUE_R_OUT = 0.193
     
-    st.info(f"📈 League environment: {total_runs:,} runs, {total_outs:,} outs, R/Out: {r_out:.3f}")
+    # Replace STEP 3 in run_complete_mac_analysis with this:
+    def get_league_environment():
+        """Return pre-calculated league environment"""
+        st.info(f"📈 Using pre-calculated league environment: R/Out = {LEAGUE_R_OUT:.3f}")
+        return LEAGUE_R_OUT
+
+    r_out = get_league_enviornment()
     
     # === STEP 4: Assign wOBA result values (EXACT SAME) ===
     with st.spinner("💯 Assigning wOBA values..."):
