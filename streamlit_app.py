@@ -23,6 +23,22 @@ def get_sklearn_components():
     from kneed import KneeLocator
     return StandardScaler, GaussianMixture, euclidean_distances, KneeLocator
 
+def standardize_player_name(name):
+    """Standardize player names by handling case and spacing"""
+    if pd.isna(name) or name == "":
+        return name
+    
+    # Convert to lowercase and strip whitespace
+    standardized = str(name).lower().strip()
+    
+    # Remove extra spaces between words
+    standardized = ' '.join(standardized.split())
+    
+    # Convert back to Title Case for display
+    standardized = standardized.title()
+    
+    return standardized
+
 # Configure Streamlit
 st.set_page_config(
     page_title="MAC Baseball Analytics",
@@ -97,6 +113,12 @@ class DatabaseManager:
                 df = ncaa_df
             
             progress_bar.progress(70)
+
+            # Standardize names before saving to database
+            if 'Pitcher' in df.columns:
+                df['Pitcher'] = df['Pitcher'].apply(lambda x: standardize_player_name(x) if pd.notna(x) else x)
+            if 'Batter' in df.columns:
+                df['Batter'] = df['Batter'].apply(lambda x: standardize_player_name(x) if pd.notna(x) else x)
             
             # Create SQLite database
             conn = sqlite3.connect(self.db_path)
