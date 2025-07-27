@@ -884,65 +884,72 @@ def main():
         )
     
     # Analysis
+    # Analysis button - ONLY runs analysis and stores data
     if st.button("🚀 Run Complete MAC Analysis", type="primary", use_container_width=True):
         if not selected_pitcher or not selected_hitters:
             st.warning("Please select both a pitcher and at least one hitter.")
-            return
-        
-        st.markdown("---")
-        st.header("🔬 MAC Analysis Pipeline")
-        
-        try:
-            summary_df, breakdown_df, full_df = run_complete_mac_analysis(
-                selected_pitcher, selected_hitters, db_manager
-            )
-        except Exception as e:
-            st.error(f"❌ Analysis failed: {e}")
-            import traceback
-            st.error(traceback.format_exc())
-            return
-        
-        if summary_df is not None and not summary_df.empty:
-            st.markdown("---")
-            st.header("📊 Results")
-            
-            # Store results in session state for persistence
-            st.session_state.summary_df = summary_df
-            st.session_state.breakdown_df = breakdown_df
-            st.session_state.selected_pitcher = selected_pitcher
-            st.session_state.selected_hitters = selected_hitters
-            
-            # Filter movement data for charts and store in session state
-            movement_df = full_df[
-                (full_df["Batter"].isin(selected_hitters)) &
-                (full_df["MinDistToPitcher"] <= distance_threshold)
-            ].copy()
-            st.session_state.movement_df = movement_df
-            
-            # Main visualization
-            fig = create_comprehensive_visualization(summary_df, breakdown_df, selected_pitcher)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Data tables
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📈 Summary Statistics")
-                st.dataframe(summary_df, use_container_width=True, hide_index=True)
-            
-            with col2:
-                st.subheader("🎯 Pitch Group Breakdown")
-                st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
-            
-            # Movement chart
-            st.subheader("🌪️ Pitch Movement Chart")
-            movement_fig = create_movement_chart(movement_df)
-            st.plotly_chart(movement_fig, use_container_width=True)
-        
         else:
-            st.warning("❌ No sufficient data found for this matchup.")
+            st.markdown("---")
+            st.header("🔬 MAC Analysis Pipeline")
+            
+            try:
+                summary_df, breakdown_df, full_df = run_complete_mac_analysis(
+                    selected_pitcher, selected_hitters, db_manager
+                )
+                
+                if summary_df is not None and not summary_df.empty:
+                    # Store results in session state for persistence
+                    st.session_state.summary_df = summary_df
+                    st.session_state.breakdown_df = breakdown_df
+                    st.session_state.selected_pitcher = selected_pitcher
+                    st.session_state.selected_hitters = selected_hitters
+                    
+                    # Filter movement data for charts and store in session state
+                    movement_df = full_df[
+                        (full_df["Batter"].isin(selected_hitters)) &
+                        (full_df["MinDistToPitcher"] <= distance_threshold)
+                    ].copy()
+                    st.session_state.movement_df = movement_df
+                    
+                    st.success("✅ Analysis complete! Results displayed below.")
+                else:
+                    st.warning("❌ No sufficient data found for this matchup.")
+                    
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {e}")
+                import traceback
+                st.error(traceback.format_exc())
     
-    # Zone analysis - OUTSIDE the button block so it persists
+    # Display persistent results - OUTSIDE button block
+    if 'summary_df' in st.session_state and 'breakdown_df' in st.session_state:
+        st.markdown("---")
+        st.header("📊 Results")
+        
+        # Main visualization
+        fig = create_comprehensive_visualization(
+            st.session_state.summary_df, 
+            st.session_state.breakdown_df, 
+            st.session_state.selected_pitcher
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Data tables
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📈 Summary Statistics")
+            st.dataframe(st.session_state.summary_df, use_container_width=True, hide_index=True)
+        
+        with col2:
+            st.subheader("🎯 Pitch Group Breakdown")
+            st.dataframe(st.session_state.breakdown_df, use_container_width=True, hide_index=True)
+        
+        # Movement chart
+        st.subheader("🌪️ Pitch Movement Chart")
+        movement_fig = create_movement_chart(st.session_state.movement_df)
+        st.plotly_chart(movement_fig, use_container_width=True)
+    
+    # Zone analysis - also outside button block
     if 'movement_df' in st.session_state and 'selected_hitters' in st.session_state:
         st.subheader("🎯 Zone-Level Heat Map Analysis")
         selected_hitter_heatmap = st.selectbox(
@@ -952,7 +959,7 @@ def main():
         )
         
         if selected_hitter_heatmap:
-            # This should update immediately when dropdown changes
+            # This updates when dropdown changes
             hitter_data = st.session_state.movement_df[
                 st.session_state.movement_df["Batter"] == selected_hitter_heatmap
             ].copy()
@@ -965,7 +972,7 @@ def main():
             else:
                 st.warning(f"No data available for {selected_hitter_heatmap} zone analysis.")
     
-    # Coverage analysis and downloads - also outside button block for persistence
+    # Coverage analysis and downloads - also outside button block
     if 'movement_df' in st.session_state and 'summary_df' in st.session_state:
         # Coverage analysis
         st.subheader("📈 Coverage Matrix")
