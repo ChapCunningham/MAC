@@ -81,7 +81,8 @@ class DatabaseManager:
             # Download CCBL data (if available)
             st.info("📂 Downloading CCBL data from Dropbox...")
             try:
-                ccbl_url = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=d88z1j0u&dl=1"
+                ccbl_url = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=7j0ytf1y&dl=1"
+                
                 ccbl_response = requests.get(ccbl_url, timeout=180)
                 ccbl_response.raise_for_status()
                 
