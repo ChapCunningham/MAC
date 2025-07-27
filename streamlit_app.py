@@ -23,38 +23,7 @@ def get_sklearn_components():
     from kneed import KneeLocator
     return StandardScaler, GaussianMixture, euclidean_distances, KneeLocator
 
-def vectorized_name_standardization(df, column_name):
-    """Vectorized approach for better performance on large datasets"""
-    if column_name not in df.columns:
-        return df
-    
-    try:
-        # Create a copy of the column to avoid modifying original
-        names = df[column_name].copy()
-        
-        # Handle nulls
-        mask_valid = names.notna() & (names != "") & (names.astype(str) != "")
-        
-        if not mask_valid.any():
-            return df
-        
-        # Apply standardization only to valid names using vectorized operations
-        valid_names = names[mask_valid].astype(str)
-        
-        # Vectorized operations
-        valid_names = valid_names.str.strip()
-        valid_names = valid_names.str.lower()
-        valid_names = valid_names.str.replace(r'\s+', ' ', regex=True)  # Replace multiple spaces
-        valid_names = valid_names.str.title()
-        
-        # Update only the valid names
-        df.loc[mask_valid, column_name] = valid_names
-        
-        return df
-        
-    except Exception as e:
-        st.warning(f"Name standardization failed for {column_name}: {e}")
-        return df
+
 
 # Configure Streamlit
 st.set_page_config(
@@ -131,11 +100,7 @@ class DatabaseManager:
             
             progress_bar.progress(70)
 
-            # Standardize names before saving to database
-            if 'Pitcher' in df.columns:
-                df = vectorized_name_standardization(df, 'Pitcher')
-            if 'Batter' in df.columns:
-                df = vectorized_name_standardization(df, 'Batter')
+            
             
             # Create SQLite database
             conn = sqlite3.connect(self.db_path)
