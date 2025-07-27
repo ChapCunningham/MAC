@@ -799,6 +799,130 @@ def create_movement_chart(movement_df):
     )
     
     return fig
+    # Move these functions OUTSIDE of main() - place them after create_movement_chart()
+
+def analyze_hot_arms_strategy(hot_arms, selected_hitters, db_manager):
+    """Analyze strategic matchups for available pitchers"""
+    if not hot_arms or not selected_hitters:
+        return None, None
+    
+    st.info(f"🔥 Analyzing {len(hot_arms)} hot arms vs {len(selected_hitters)} hitters...")
+    
+    # Store results for all pitcher-hitter combinations
+    all_matchups = []
+    pitcher_summaries = {}
+    
+    for pitcher in hot_arms:
+        try:
+            # Run MAC analysis for this pitcher (but suppress the verbose output)
+            summary_df, breakdown_df, _ = run_complete_mac_analysis(
+                pitcher, selected_hitters, db_manager
+            )
+            
+            if summary_df is not None and not summary_df.empty:
+                # Store individual matchup data
+                for _, row in summary_df.iterrows():
+                    all_matchups.append({
+                        'Pitcher': pitcher,
+                        'Hitter': row['Batter'],
+                        'RV/100': row['RV/100'],
+                        'wOBA': row['wOBA'],
+                        'Pitches': row['Pitches'],
+                        'Whiff%': row['Whiff%'],
+                        'HH%': row['HH%']
+                    })
+                
+                # Store pitcher summary
+                pitcher_summaries[pitcher] = {
+                    'avg_rv': summary_df['RV/100'].mean(),
+                    'best_matchup': summary_df.loc[summary_df['RV/100'].idxmin(), 'Batter'],
+                    'worst_matchup': summary_df.loc[summary_df['RV/100'].idxmax(), 'Batter'],
+                    'best_rv': summary_df['RV/100'].min(),
+                    'worst_rv': summary_df['RV/100'].max(),
+                    'total_pitches': summary_df['Pitches'].sum()
+                }
+                
+        except Exception as e:
+            st.warning(f"Could not analyze {pitcher}: {str(e)}")
+            continue
+    
+    return pd.DataFrame(all_matchups), pitcher_summaries
+
+def create_matchup_rankings_table(matchups_df):
+    """Create color-coded pitcher matchup rankings"""
+    if matchups_df.empty:
+        return None
+    
+    # Create pivot table for better visualization
+    pivot_df = matchups_df.pivot(index='Pitcher', columns='Hitter', values='RV/100')
+    
+    # Create styled dataframe
+    def color_rv_values(val):
+        if pd.isna(val):
+            return 'background-color: lightgray'
+        elif val < -2:
+            return 'background-color: darkgreen; color: white'  # Excellent for pitcher
+        elif val < 0:
+            return 'background-color: lightgreen'  # Good for pitcher
+        elif val < 2:
+            return 'background-color: lightyellow'  # Neutral
+        elif val < 5:
+            return 'background-color: lightcoral'  # Bad for pitcher
+        else:
+            return 'background-color: darkred; color: white'  # Very bad for pitcher
+    
+    styled_df = pivot_df.style.applymap(color_rv_values).format(precision=2)
+    return styled_df
+
+def create_optimal_usage_recommendations(matchups_df, pitcher_summaries):
+    """Generate strategic usage recommendations"""
+    if matchups_df.empty:
+        return []
+    
+    recommendations = []
+    
+    # Best overall matchup
+    best_overall = matchups_df.loc[matchups_df['RV/100'].idxmin()]
+    recommendations.append({
+        'type': '🎯 Best Overall Matchup',
+        'recommendation': f"{best_overall['Pitcher']} vs {best_overall['Hitter']}",
+        'details': f"RV/100: {best_overall['RV/100']:.2f} (Excellent pitcher advantage)"
+    })
+    
+    # Worst matchup to avoid
+    worst_overall = matchups_df.loc[matchups_df['RV/100'].idxmax()]
+    recommendations.append({
+        'type': '⚠️ Matchup to Avoid',
+        'recommendation': f"{worst_overall['Pitcher']} vs {worst_overall['Hitter']}",
+        'details': f"RV/100: {worst_overall['RV/100']:.2f} (Strong hitter advantage)"
+    })
+    
+    # Best pitcher for each hitter
+    for hitter in matchups_df['Hitter'].unique():
+        hitter_matchups = matchups_df[matchups_df['Hitter'] == hitter]
+        best_pitcher = hitter_matchups.loc[hitter_matchups['RV/100'].idxmin()]
+        recommendations.append({
+            'type': f'👤 Best vs {hitter}',
+            'recommendation': f"{best_pitcher['Pitcher']}",
+            'details': f"RV/100: {best_pitcher['RV/100']:.2f}"
+        })
+    
+    # Lineup entry recommendations
+    rv_threshold = matchups_df['RV/100'].median()
+    
+    for pitcher in pitcher_summaries.keys():
+        pitcher_matchups = matchups_df[matchups_df['Pitcher'] == pitcher]
+        good_matchups = pitcher_matchups[pitcher_matchups['RV/100'] < rv_threshold]
+        
+        if len(good_matchups) >= 2:
+            hitters_list = ", ".join(good_matchups['Hitter'].tolist())
+            recommendations.append({
+                'type': f'📍 {pitcher} Entry Spots',
+                'recommendation': f"Optimal vs: {hitters_list}",
+                'details': f"Avg RV/100: {good_matchups['RV/100'].mean():.2f}"
+            })
+    
+    return recommendations
 
 # Initialize database manager
 @st.cache_resource
@@ -881,6 +1005,15 @@ def main():
             "Choose hitters:",
             available_batters,
             default=available_batters[:3] if len(available_batters) >= 3 else available_batters[:1]
+        )
+        
+        # NEW: Hot Arms selection
+        st.subheader("🔥 Hot Arms Available")
+        hot_arms = st.multiselect(
+            "Select available pitchers for game strategy:",
+            available_pitchers,
+            default=[],
+            help="Choose pitchers available to pitch in this game for strategic analysis"
         )
     
     # Analysis
@@ -1053,6 +1186,77 @@ def main():
                 f"{avg_rv:.2f}",
                 "Lower is better for pitcher"
             )
+
+        # MOVE the Hot Arms analysis section to AFTER the main results display
+    # Place this AFTER the "Analysis Insights" section at the very end:
+    
+    # Hot Arms Strategic Analysis
+    if hot_arms and 'selected_hitters' in st.session_state:
+        st.markdown("---")
+        st.subheader("🔥 Hot Arms Strategic Analysis")
+        
+        if st.button("🎯 Analyze Hot Arms Strategy", type="secondary"):
+            with st.spinner("Analyzing all pitcher-hitter matchups..."):
+                matchups_df, pitcher_summaries = analyze_hot_arms_strategy(
+                    hot_arms, st.session_state.selected_hitters, db_manager
+                )
+                
+                if matchups_df is not None and not matchups_df.empty:
+                    # Store in session state
+                    st.session_state.hot_arms_matchups = matchups_df
+                    st.session_state.hot_arms_summaries = pitcher_summaries
+                    st.success("✅ Hot Arms analysis complete!")
+                else:
+                    st.warning("No data available for Hot Arms analysis")
+
+    # Display Hot Arms results if available
+    if 'hot_arms_matchups' in st.session_state and 'hot_arms_summaries' in st.session_state:
+        
+        # Pitcher Matchup Rankings with color coding
+        st.subheader("🏆 Pitcher Matchup Rankings")
+        st.write("**Color Guide:** 🟢 Great for Pitcher | 🟡 Neutral | 🔴 Bad for Pitcher")
+        
+        styled_rankings = create_matchup_rankings_table(st.session_state.hot_arms_matchups)
+        if styled_rankings is not None:
+            st.dataframe(styled_rankings, use_container_width=True)
+        
+        # Strategic Recommendations
+        st.subheader("📍 Strategic Recommendations")
+        recommendations = create_optimal_usage_recommendations(
+            st.session_state.hot_arms_matchups, 
+            st.session_state.hot_arms_summaries
+        )
+        
+        # Display recommendations in organized columns
+        if recommendations:
+            for i in range(0, len(recommendations), 2):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if i < len(recommendations):
+                        rec = recommendations[i]
+                        st.info(f"**{rec['type']}**\n\n{rec['recommendation']}\n\n*{rec['details']}*")
+                
+                with col2:
+                    if i + 1 < len(recommendations):
+                        rec = recommendations[i + 1]
+                        st.info(f"**{rec['type']}**\n\n{rec['recommendation']}\n\n*{rec['details']}*")
+        
+        # Summary Statistics
+        st.subheader("📊 Hot Arms Summary")
+        summary_data = []
+        for pitcher, stats in st.session_state.hot_arms_summaries.items():
+            summary_data.append({
+                'Pitcher': pitcher,
+                'Avg RV/100': f"{stats['avg_rv']:.2f}",
+                'Best Matchup': f"{stats['best_matchup']} ({stats['best_rv']:.2f})",
+                'Worst Matchup': f"{stats['worst_matchup']} ({stats['worst_rv']:.2f})",
+                'Total Pitches': stats['total_pitches']
+            })
+        
+        if summary_data:
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 if __name__ == "__main__":
     main()
