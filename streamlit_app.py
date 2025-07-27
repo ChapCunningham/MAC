@@ -1120,13 +1120,18 @@ def analyze_hot_arms_strategy(hot_arms, selected_hitters, db_manager):
     
     return pd.DataFrame(all_matchups), pitcher_summaries
 
-def create_matchup_rankings_table(matchups_df):
-    """Create color-coded pitcher matchup rankings"""
+def create_matchup_rankings_table(matchups_df, hitter_order):
+    """Create color-coded pitcher matchup rankings with preserved hitter order"""
     if matchups_df.empty:
         return None
     
     # Create pivot table for better visualization
     pivot_df = matchups_df.pivot(index='Pitcher', columns='Hitter', values='RV/100')
+    
+    # Reorder columns to match the original hitter input order
+    # Only include hitters that actually exist in the data
+    available_hitters = [h for h in hitter_order if h in pivot_df.columns]
+    pivot_df = pivot_df[available_hitters]
     
     # Create styled dataframe
     def color_rv_values(val):
@@ -1488,7 +1493,10 @@ def main():
         st.subheader("🏆 Pitcher Matchup Rankings")
         st.write("**Color Guide:** 🟢 Great for Pitcher | 🟡 Neutral | 🔴 Bad for Pitcher")
         
-        styled_rankings = create_matchup_rankings_table(st.session_state.hot_arms_matchups)
+        styled_rankings = create_matchup_rankings_table(
+            st.session_state.hot_arms_matchups, 
+            st.session_state.selected_hitters
+        )
         if styled_rankings is not None:
             st.dataframe(styled_rankings, use_container_width=True)
         
