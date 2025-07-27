@@ -248,7 +248,7 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
         st.info(f"📈 Using pre-calculated league environment: R/Out = {LEAGUE_R_OUT:.3f}")
         return LEAGUE_R_OUT
 
-    r_out = get_league_enviornment()
+    r_out = get_league_environment()
     
     # === STEP 4: Assign wOBA result values (EXACT SAME) ===
     with st.spinner("💯 Assigning wOBA values..."):
