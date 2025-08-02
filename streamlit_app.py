@@ -267,7 +267,7 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
         else:
             df['wOBA_result'] = clean_numeric_column(df['wOBA_result'])
     
-    st.success("✅ wOBA values assigned")
+    st.success("wOBA values assigned")
     
     # === STEP 5: Feature sets (EXACT SAME) ===
     scanning_features = ['RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate', 'RelHeight', 'RelSide']
@@ -276,11 +276,11 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     df = df.dropna(subset=scanning_features + ["Pitcher", "Batter"])
     pitcher_pitches = pitcher_pitches.dropna(subset=scanning_features + ["Pitcher", "Batter"])
     
-    st.info(f"🎯 Using clustering features: {clustering_features}")
-    st.info(f"🔍 Using scanning features: {scanning_features}")
+    st.info(f"Using clustering features: {clustering_features}")
+    st.info(f"Using scanning features: {scanning_features}")
     
     # === STEP 6: Scale features and cluster pitcher's arsenal (EXACT SAME) ===
-    with st.spinner("🤖 Clustering pitcher's arsenal..."):
+    with st.spinner("Clustering pitcher's arsenal..."):
         StandardScaler, GaussianMixture, euclidean_distances, KneeLocator = get_sklearn_components()
         
         # Step 1: Fit using clustering features on pitcher's data (EXACT SAME)
@@ -289,7 +289,7 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
         
         # Step 2: Run BIC loop to find optimal number of clusters (EXACT SAME)
         bic_scores = []
-        ks = range(1, 10)
+        ks = range(4, 10)
         for k in ks:
             gmm = GaussianMixture(n_components=k, random_state=42)
             gmm.fit(X_cluster)
