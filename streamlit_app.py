@@ -1216,6 +1216,47 @@ def main():
     except Exception as e:
         st.error(f"❌ Could not initialize database: {e}")
         st.stop()
+
+    ##CONFIG START
+        # ==================== DEFAULT SELECTIONS CONFIGURATION ====================
+    # Modify these lists to set your preferred defaults
+    DEFAULT_CONFIG = {
+        "pitcher": "Marsten, Duncan",  # Change to your preferred default pitcher
+        "hitters": [
+            "Brini, Niko",
+            "Marsh, Tanner", 
+            "Gerety, Ryan",
+            "Conte, Matt",
+            "Koonin, Jake",
+            "Fultz, Patrick",
+            "Wolff, Kyle",
+            "Harris, Sam",
+            "DeCarlo, Sam",
+            "Elko, Michael",
+            "Robbins, Aiden",
+            "Echevarria, Ernie"
+        ],
+        "hot_arms": [
+            "Hilburger, Kaden",
+            "Payamps, Andrelys",
+            "Alicea, Edwin",
+            "Dye, Mitch",
+            "Brittain, Nathan",
+            "Marsten, Duncan",  # Same as selected pitcher
+            "Seid, Spencer",
+            "Louck, Brady",
+            "Kipp, Kyle",
+            "Jenkins, Matthew",
+            "Knief, Chris",
+            "Hartley, Tyler",
+            "Bates, Zach",
+            "O'Donnell, Landon",
+            "James, David",
+            "DeTienne, Jack"
+        ]
+    }
+    # ============================================================================
+    ##CONFIG END
     
     # Sidebar info
     with st.sidebar:
@@ -1265,33 +1306,53 @@ def main():
     
     st.markdown("---")
     
-    # Selection interface
+    # NEW SELECTION INTERFACE START
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.subheader("Select Pitcher")
+        
+        # Use configured default pitcher
+        default_pitcher = DEFAULT_CONFIG["pitcher"] if DEFAULT_CONFIG["pitcher"] in available_pitchers else (available_pitchers[0] if available_pitchers else None)
+        
         selected_pitcher = st.selectbox(
             "Choose a pitcher:",
             available_pitchers,
-            index=0 if available_pitchers else None
+            index=available_pitchers.index(default_pitcher) if default_pitcher and default_pitcher in available_pitchers else 0
         )
     
     with col2:
         st.subheader("Select Hitters")
+        
+        # Use configured default hitters
+        default_hitters = [h for h in DEFAULT_CONFIG["hitters"] if h in available_batters]
+        # Fallback to first few batters if none of the configured defaults exist
+        if not default_hitters and available_batters:
+            default_hitters = available_batters[:3]
+        
         selected_hitters = st.multiselect(
             "Choose hitters:",
             available_batters,
-            default=available_batters[:3] if len(available_batters) >= 3 else available_batters[:1]
+            default=default_hitters
         )
         
-        # NEW: Hot Arms selection
+        # Hot Arms selection with configured defaults
         st.subheader("🔥 Hot Arms Available")
+        
+        # Use configured default hot arms
+        default_hot_arms = [p for p in DEFAULT_CONFIG["hot_arms"] if p in available_pitchers]
+        # Fallback to first few pitchers if none of the configured defaults exist
+        if not default_hot_arms and available_pitchers:
+            default_hot_arms = available_pitchers[:5]
+        
         hot_arms = st.multiselect(
             "Select available pitchers for game strategy:",
             available_pitchers,
-            default=[],
+            default=default_hot_arms,
             help="Choose pitchers available to pitch in this game for strategic analysis"
         )
+    # END OF NEW SELECT INTERFACE 
+
     
     # Analysis
     # Analysis button - ONLY runs analysis and stores data
