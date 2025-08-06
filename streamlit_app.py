@@ -35,7 +35,7 @@ st.set_page_config(
 
 # Constants - EXACT SAME as MAC_module
 color_dict = {"Fastball": "red", "Breaking": "blue", "Offspeed": "green", "Unknown": "gray"}
-distance_threshold = 0.6
+distance_threshold = 0.8
 strike_zone = {"top": 3.3775, "bottom": 1.5, "left": -0.83083, "right": 0.83083}
 swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
 
@@ -1223,17 +1223,17 @@ def main():
         "pitcher": "Alicea, Edwin",  # Change to your preferred default pitcher
         "hitters": [
             "Brini, Niko",
-            "Marsh, Tanner", 
+            "Koonin, Jake", 
             "Gerety, Ryan",
             "Conte, Matt",
-            "Koonin, Jake",
             "Fultz, Patrick",
-            "Wolff, Kyle",
-            "Harris, Sam",
             "DeCarlo, Sam",
+            "Wolff, Kyle",
+            "Echevarria, Ernie",
             "Elko, Michael",
+            "Harris, Sam",
             "Robbins, Aiden",
-            "Echevarria, Ernie"
+            
         ],
         "hot_arms": [
             "Hilburger, Kaden",
