@@ -515,7 +515,7 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
             
             results.append(hitter_result)
     
-    st.success("**MAC Analysis Complete!** All original logic preserved")
+
     
     return pd.DataFrame(results), pd.DataFrame(group_breakdown), df
 
