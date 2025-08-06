@@ -249,7 +249,7 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     # Replace STEP 3 in run_complete_mac_analysis with this:
     def get_league_environment():
         """Return pre-calculated league environment"""
-        st.info(f"Using pre-calculated league environment: R/Out = {LEAGUE_R_OUT:.3f}")
+
         return LEAGUE_R_OUT
 
     r_out = get_league_environment()
