@@ -1220,7 +1220,7 @@ def main():
         # ==================== DEFAULT SELECTIONS CONFIGURATION ====================
     # Modify these lists to set your preferred defaults
     DEFAULT_CONFIG = {
-        "pitcher": "Alicea, Edwin",  # Change to your preferred default pitcher
+        "pitcher": "Seid, Spencer",  # Change to your preferred default pitcher
         "hitters": [
             "Brini, Niko",
             "Koonin, Jake", 
