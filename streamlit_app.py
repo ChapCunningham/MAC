@@ -1220,38 +1220,26 @@ def main():
         # ==================== DEFAULT SELECTIONS CONFIGURATION ====================
     # Modify these lists to set your preferred defaults
     DEFAULT_CONFIG = {
-        "pitcher": "Seid, Spencer",  # Change to your preferred default pitcher
+        "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
-            "Brini, Niko",
-            "Koonin, Jake", 
-            "Gerety, Ryan",
-            "Conte, Matt",
-            "Fultz, Patrick",
-            "DeCarlo, Sam",
-            "Echevarria, Ernie",
-            "Wolff, Kyle",
-            "Harris, Sam",
-            "Elko, Michael",
-            "Robbins, Aiden",
+            "Fischer, Andrew",
+            "Chapman, Reese",
+            "Aloy, Wehiwa",
+            "Tinney, Carson",
+            "Davalan, Charles",
+            "Hill, Luke",
+            "Utermark, Judd", 
+            "Bargo, Dalton",
+            "Kerce, Carson",
+            "Cuvet, Daniel"
             
         ],
         "hot_arms": [
-            "Hilburger, Kaden",
-            "Payamps, Andrelys",
-            "Alicea, Edwin",
-            "Dye, Mitch",
-            "Brittain, Nathan",
-            "Marsten, Duncan",  # Same as selected pitcher
-            "Seid, Spencer",
-            "Louck, Brady",
-            "Kipp, Kyle",
-            "Jenkins, Matthew",
-            "Knief, Chris",
-            "Hartley, Tyler",
-            "Bates, Zach",
-            "O'Donnell, Landon",
-            "James, David",
-            "DeTienne, Jack"
+            "Calhoun, Hudson",
+            "Rabe, Taylor",
+            "Sipila, Marko",
+            "Libbert, Wil",
+            "Townsend, Cade"
         ]
     }
     # ============================================================================
