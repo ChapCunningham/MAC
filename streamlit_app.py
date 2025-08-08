@@ -35,7 +35,7 @@ st.set_page_config(
 
 # Constants - EXACT SAME as MAC_module
 color_dict = {"Fastball": "red", "Breaking": "blue", "Offspeed": "green", "Unknown": "gray"}
-distance_threshold = 0.8
+distance_threshold = 0.6
 strike_zone = {"top": 3.3775, "bottom": 1.5, "left": -0.83083, "right": 0.83083}
 swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
 
