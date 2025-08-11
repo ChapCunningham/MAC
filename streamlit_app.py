@@ -1405,7 +1405,7 @@ def main():
         # Movement chart
         st.subheader("Pitch Movement Chart")
         movement_fig = create_movement_chart(st.session_state.movement_df)
-        st.plotly_chart(movement_fig, use_container_width=True)
+        st.plotly_chart(movement_fig, use_container_width=False)
     
     # Zone analysis - also outside button block
     if 'movement_df' in st.session_state and 'selected_hitters' in st.session_state:
