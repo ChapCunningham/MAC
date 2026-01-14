@@ -1244,7 +1244,7 @@ def get_database_manager():
     return DatabaseManager()
 
 def main():
-    st.title("2026 OMBSB MAC (Matchup Analysis Calculator")
+    st.title("2026 OMBSB MAC (Matchup Analysis Calculator)")
     st.markdown("**Complete MAC Implementation** - All original logic preserved with step-by-step transparency")
 
     # Initialize database
