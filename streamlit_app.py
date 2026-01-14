@@ -67,215 +67,99 @@ import requests
 import streamlit as st
 
 
+import os
+import sqlite3
+from io import BytesIO
+
+import pandas as pd
+import requests
+import streamlit as st
+
+
 class DatabaseManager:
-    def __init__(self, db_path: str = "baseball_data.db"):
+    def __init__(self, db_path="baseball_data.db"):
         self.db_path = db_path
         self.ensure_database_exists()
-
+    
     def ensure_database_exists(self):
-        """Download and create database if it doesn't exist."""
+        """Download and create database if it doesn't exist"""
         if not os.path.exists(self.db_path):
             st.info("Setting up database for first time use...")
             self.create_database_from_gdrive()
-
-    # -------------------------
-    # Google Drive downloading
-    # -------------------------
-
-    @staticmethod
-    def _is_html(response: requests.Response) -> bool:
-        ct = (response.headers.get("content-type") or "").lower()
-        if "text/html" in ct:
-            return True
-        # Sometimes headers are misleading; sniff bytes.
-        try:
-            head = response.content[:200].lower()
-            return b"<html" in head or b"<!doctype html" in head
-        except Exception:
-            return False
-
-    @staticmethod
-    def _extract_confirm_token(html: str) -> Optional[str]:
-        """
-        Extract a Drive confirm token from HTML (fallback for newer interstitials).
-        """
-        if not html:
-            return None
-        m = re.search(r"confirm=([0-9A-Za-z\-_]+)", html)
-        if m:
-            return m.group(1)
-        m = re.search(r'name="confirm"\s+value="([^"]+)"', html, flags=re.IGNORECASE)
-        if m:
-            return m.group(1)
-        return None
-
-    def download_from_gdrive_to_tempfile(
-        self,
-        file_id: str,
-        session: requests.Session,
-        suffix: str = ".parquet",
-        timeout: int = 300,
-    ) -> str:
-        """
-        Download a Google Drive file to a temporary local file.
-        Strategy:
-          1) Initial GET to uc?export=download&id=...
-          2) If HTML, try 'download_warning' cookie confirm (your working technique)
-          3) If still HTML, parse confirm token from HTML and retry
-          4) If still HTML, raise (likely permissions or org restriction)
-        Returns: local temp file path
-        """
-        base_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-
-        r = session.get(base_url, stream=True, timeout=timeout, allow_redirects=True)
-        r.raise_for_status()
-
-        # 1) Cookie-based large file confirmation (your technique)
-        if self._is_html(r):
-            confirm_value = None
-            for k, v in r.cookies.items():
-                if k.startswith("download_warning"):
-                    confirm_value = v
-                    break
-            if confirm_value:
-                confirm_url = f"https://drive.google.com/uc?export=download&confirm={confirm_value}&id={file_id}"
-                r = session.get(confirm_url, stream=True, timeout=timeout, allow_redirects=True)
-                r.raise_for_status()
-
-        # 2) Fallback: parse confirm token from HTML (newer Drive interstitials)
-        if self._is_html(r):
-            html = r.text or ""
-            lower = html.lower()
-            # Common permissions signals
-            if (
-                "request access" in lower
-                or "sign in" in lower
-                or "accounts.google.com" in (r.url or "").lower()
-                or "to continue to google drive" in lower
-            ):
-                raise Exception(
-                    f"Google Drive file {file_id} is not publicly accessible. "
-                    "Set sharing to 'Anyone with the link' (Viewer), or use authenticated download."
-                )
-
-            token = self._extract_confirm_token(html)
-            if token:
-                confirm_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
-                r = session.get(confirm_url, stream=True, timeout=timeout, allow_redirects=True)
-                r.raise_for_status()
-
-        # 3) Still HTML => fail
-        if self._is_html(r):
-            raise Exception(
-                f"Unable to download Google Drive file {file_id}: still receiving HTML. "
-                "This is almost always permissions (not public / org-restricted) or a Drive interstitial "
-                "that requires authenticated download."
-            )
-
-        # Stream to temp file (prevents huge RAM usage vs response.content)
-        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-        os.close(fd)
-
-        try:
-            with open(tmp_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-
-            # Parquet sanity check: "PAR1"
-            with open(tmp_path, "rb") as f:
-                magic = f.read(4)
-            if magic != b"PAR1":
-                # Might have saved HTML anyway
-                with open(tmp_path, "rb") as f:
-                    head = f.read(200).lower()
-                if b"<html" in head or b"<!doctype html" in head:
-                    raise Exception(
-                        f"Downloaded HTML instead of parquet for file {file_id}. "
-                        "Check sharing permissions ('Anyone with the link')."
-                    )
-                raise Exception(
-                    f"Downloaded file for {file_id} does not look like parquet (missing PAR1 header)."
-                )
-
-            return tmp_path
-
-        except Exception:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-            raise
-
-    # -------------------------
-    # Database creation
-    # -------------------------
-
+    
+    def download_from_gdrive(self, file_id, session=None):
+        """Download file from Google Drive"""
+        if session is None:
+            session = requests.Session()
+        
+        # Initial request to get download URL
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        
+        response = session.get(url, stream=True)
+        
+        # Handle large file confirmation
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                # Large file - need confirmation
+                confirm_url = f"https://drive.google.com/uc?export=download&confirm={value}&id={file_id}"
+                response = session.get(confirm_url, stream=True)
+                break
+        
+        return response
+    
     def create_database_from_gdrive(self):
-        """Create database from NCAA + OMBSB Fall26 Google Drive parquet files."""
-        progress_bar = None
-        session = None
-        conn = None
-        ncaa_path = None
-        ombsb_path = None
-
+        """Create database from both NCAA and OMBSB Fall26 data (both from Google Drive)"""
         try:
             progress_bar = st.progress(0)
-            session = requests.Session()
-
-            # ---- Download + load NCAA ----
+            session = requests.Session()  # Reuse session for efficiency
+            
             st.info("Downloading NCAA data from Google Drive...")
+            
+            # NCAA file id
             ncaa_file_id = "1FmXytu8_iEDWeUm7JtHGVzQd5S4ru4eb"
-
-            ncaa_path = self.download_from_gdrive_to_tempfile(ncaa_file_id, session, suffix=".parquet")
-            st.info(f"NCAA file downloaded: {os.path.getsize(ncaa_path):,} bytes")
-            progress_bar.progress(25)
-
-            ncaa_df = pd.read_parquet(ncaa_path)
+            
+            response = self.download_from_gdrive(ncaa_file_id, session)
+            response.raise_for_status()
+            progress_bar.progress(30)
+            
+            ncaa_df = pd.read_parquet(BytesIO(response.content))
             st.success(f"NCAA data loaded: {len(ncaa_df):,} rows")
-            progress_bar.progress(45)
-
-            df = ncaa_df
-
-            # ---- Download + load OMBSB (optional) ----
+            progress_bar.progress(50)
+            
+            # Download OMBSB Fall26 data
             st.info("Downloading OMBSB Fall26 data from Google Drive...")
             try:
                 ombsb_file_id = "1u8ih1dzjXVBhSFXtRe6AbLPUtVMQPqdt"
-                ombsb_path = self.download_from_gdrive_to_tempfile(ombsb_file_id, session, suffix=".parquet")
-                st.info(f"OMBSB file downloaded: {os.path.getsize(ombsb_path):,} bytes")
-                progress_bar.progress(55)
-
-                ombsb_df = pd.read_parquet(ombsb_path)
+                
+                ombsb_response = self.download_from_gdrive(ombsb_file_id, session)
+                ombsb_response.raise_for_status()
+                
+                ombsb_df = pd.read_parquet(BytesIO(ombsb_response.content))
                 st.success(f"OMBSB Fall26 data loaded: {len(ombsb_df):,} rows")
-
+                
                 df = pd.concat([ncaa_df, ombsb_df], ignore_index=True)
                 st.success(f"Combined dataset: {len(df):,} rows")
-
+                
             except Exception as e:
                 st.warning(f"Could not load OMBSB Fall26 data: {e}")
                 st.info("Using NCAA data only")
-
+                df = ncaa_df
+            
             progress_bar.progress(70)
-
-            # ---- Create SQLite database ----
+            
+            # Create SQLite database - use SQL for memory optimization
             conn = sqlite3.connect(self.db_path)
-
-            # Replace main table
-            df.to_sql("pitches", conn, if_exists="replace", index=False)
-            progress_bar.progress(82)
-
+            df.to_sql('pitches', conn, if_exists='replace', index=False)
+            progress_bar.progress(85)
+            
+            # Create indexes
             cursor = conn.cursor()
-
-            # Indexes (rerun-safe)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pitcher ON pitches(Pitcher)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_batter ON pitches(Batter)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pitcher_batter ON pitches(Pitcher, Batter)")
-
-            # Summary table (rerun-safe)
-            cursor.execute("DROP TABLE IF EXISTS pitcher_summary")
-            cursor.execute(
-                """
+            cursor.execute("CREATE INDEX idx_pitcher ON pitches(Pitcher)")
+            cursor.execute("CREATE INDEX idx_batter ON pitches(Batter)")
+            cursor.execute("CREATE INDEX idx_pitcher_batter ON pitches(Pitcher, Batter)")
+            
+            # Create summary tables
+            cursor.execute("""
                 CREATE TABLE pitcher_summary AS
                 SELECT 
                     Pitcher,
@@ -285,122 +169,88 @@ class DatabaseManager:
                     AVG(HorzBreak) as avg_hb,
                     AVG(SpinRate) as avg_spin
                 FROM pitches 
-                WHERE RelSpeed IS NOT NULL
-                  AND InducedVertBreak IS NOT NULL
-                  AND HorzBreak IS NOT NULL
-                  AND SpinRate IS NOT NULL
+                WHERE RelSpeed IS NOT NULL AND InducedVertBreak IS NOT NULL 
+                  AND HorzBreak IS NOT NULL AND SpinRate IS NOT NULL
                   AND Pitcher IS NOT NULL
                 GROUP BY Pitcher
                 HAVING COUNT(*) >= 10
-                """
-            )
-
+            """)
+            
             conn.commit()
+            conn.close()
             progress_bar.progress(100)
             st.success("Database created successfully!")
-
+            
+            # Clean up memory
+            del ncaa_df
+            if 'ombsb_df' in locals():
+                del ombsb_df
+            del df
+            session.close()  # Close the session
+            
         except Exception as e:
             st.error(f"Error creating database: {e}")
+            if 'session' in locals():
+                session.close()
             raise
-
-        finally:
-            # Close DB
-            try:
-                if conn is not None:
-                    conn.close()
-            except Exception:
-                pass
-
-            # Close session
-            try:
-                if session is not None:
-                    session.close()
-            except Exception:
-                pass
-
-            # Remove temp files
-            for p in [ncaa_path, ombsb_path]:
-                try:
-                    if p and os.path.exists(p):
-                        os.remove(p)
-                except Exception:
-                    pass
-
-    # -------------------------
-    # Query helpers
-    # -------------------------
-
+    
     def get_connection(self):
-        """Get database connection."""
+        """Get database connection"""
         return sqlite3.connect(self.db_path)
-
-    def get_pitchers(self) -> List[str]:
-        """Get list of pitchers with sufficient data."""
+    
+    def get_pitchers(self):
+        """Get list of pitchers with sufficient data"""
         conn = self.get_connection()
-        try:
-            df = pd.read_sql_query("SELECT Pitcher FROM pitcher_summary ORDER BY Pitcher", conn)
-            return df["Pitcher"].dropna().tolist()
-        finally:
-            conn.close()
-
-    def get_batters(self) -> List[str]:
-        """Get list of batters."""
+        query = "SELECT Pitcher FROM pitcher_summary ORDER BY Pitcher"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df['Pitcher'].tolist()
+    
+    def get_batters(self):
+        """Get list of batters"""
         conn = self.get_connection()
-        try:
-            df = pd.read_sql_query(
-                "SELECT DISTINCT Batter FROM pitches WHERE Batter IS NOT NULL ORDER BY Batter",
-                conn,
-            )
-            return df["Batter"].dropna().tolist()
-        finally:
-            conn.close()
-
-    def get_analysis_data(self, pitcher_name: str, target_hitters: List[str]) -> pd.DataFrame:
+        query = "SELECT DISTINCT Batter FROM pitches WHERE Batter IS NOT NULL ORDER BY Batter"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df['Batter'].tolist()
+    
+    def get_analysis_data(self, pitcher_name, target_hitters):
+        """Get data for analysis - chunked approach for memory efficiency"""
+        conn = self.get_connection()
+        
+        # Get data in smaller chunks
+        placeholders = ','.join(['?' for _ in target_hitters])
+        
+        query = f"""
+            SELECT * FROM pitches 
+            WHERE (Pitcher = ? OR Batter IN ({placeholders}))
+              AND RelSpeed IS NOT NULL 
+              AND InducedVertBreak IS NOT NULL 
+              AND HorzBreak IS NOT NULL 
+              AND SpinRate IS NOT NULL
+              AND Pitcher IS NOT NULL 
+              AND Batter IS NOT NULL
         """
-        Get data for analysis - chunked approach for memory efficiency.
-        Handles empty hitter list safely.
-        """
-        conn = self.get_connection()
+        
+        params = [pitcher_name] + target_hitters
+        
+        # Try chunked reading, fall back to regular if not supported
         try:
-            base_where = """
-                RelSpeed IS NOT NULL
-                AND InducedVertBreak IS NOT NULL
-                AND HorzBreak IS NOT NULL
-                AND SpinRate IS NOT NULL
-                AND Pitcher IS NOT NULL
-                AND Batter IS NOT NULL
-            """
-
-            if not target_hitters:
-                query = f"""
-                    SELECT * FROM pitches
-                    WHERE Pitcher = ?
-                      AND {base_where}
-                """
-                params = [pitcher_name]
-            else:
-                placeholders = ",".join(["?"] * len(target_hitters))
-                query = f"""
-                    SELECT * FROM pitches
-                    WHERE (Pitcher = ? OR Batter IN ({placeholders}))
-                      AND {base_where}
-                """
-                params = [pitcher_name] + list(target_hitters)
-
-            # Chunked read
+            # Read in chunks to manage memory
+            chunk_size = 10000
             chunks = []
-            try:
-                for chunk in pd.read_sql_query(query, conn, params=params, chunksize=10000):
-                    chunks.append(chunk)
-                return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
-            except TypeError:
-                # Older pandas fallback
-                return pd.read_sql_query(query, conn, params=params)
+            
+            for chunk in pd.read_sql_query(query, conn, params=params, chunksize=chunk_size):
+                chunks.append(chunk)
+            
+            df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+        except TypeError:
+            # chunksize not supported in some pandas versions, read all at once
+            df = pd.read_sql_query(query, conn, params=params)
+        
+        conn.close()
+        return df
 
-        finally:
-            conn.close()
-
-### end of database class
 def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     """Complete MAC analysis with ALL original logic preserved"""
     
