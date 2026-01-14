@@ -1293,8 +1293,7 @@ def main():
             "Hooks, Walker",
             "Collopy, Patrick",
             "Elliott, Hunter",
-            "Gibson, Grayson",
-            "Libbert, Wil"
+            "Gibson, Grayson"
         ]
     }
     # ============================================================================
