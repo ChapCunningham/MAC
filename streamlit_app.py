@@ -55,6 +55,13 @@ def clean_numeric_column(series):
     return pd.to_numeric(series, errors='coerce')
 
 
+import os
+import sqlite3
+import pandas as pd
+import streamlit as st
+import requests
+from io import BytesIO
+
 class DatabaseManager:
     def __init__(self, db_path="baseball_data.db"):
         self.db_path = db_path
@@ -64,65 +71,42 @@ class DatabaseManager:
         """Download and create database if it doesn't exist"""
         if not os.path.exists(self.db_path):
             st.info("Setting up database for first time use...")
-            self.create_database_from_google_drive()
+            self.create_database_from_gdrive()
     
-    def download_from_google_drive(self, file_id, file_name):
-        """Download file from Google Drive with large file handling"""
+    def download_from_gdrive(self, file_id, session):
+        """Simple Google Drive download using direct download URL"""
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        
-        session = requests.Session()
-        response = session.get(url, stream=True, timeout=300)
-        
-        # Check if Google Drive is asking for virus scan confirmation
-        if 'virus scan warning' in response.text.lower() or 'download_warning' in response.text:
-            # Extract confirmation token
-            for key, value in response.cookies.items():
-                if key.startswith('download_warning'):
-                    token = value
-                    break
-            else:
-                # Look for token in the response text
-                token_match = re.search(r'confirm=([a-zA-Z0-9\-_]+)', response.text)
-                if token_match:
-                    token = token_match.group(1)
-                else:
-                    raise Exception(f"Could not find confirmation token for {file_name}")
-            
-            # Make confirmed request
-            confirmed_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
-            response = session.get(confirmed_url, stream=True, timeout=300)
-        
-        response.raise_for_status()
-        
-        # Check if we got HTML instead of the file (another virus scan page)
-        content_type = response.headers.get('content-type', '').lower()
-        if 'text/html' in content_type and len(response.content) < 1000000:  # If HTML and small, probably an error page
-            raise Exception(f"Received HTML response instead of file for {file_name}. File may be too large or require different permissions.")
-        
-        return response.content
+        response = session.get(url, timeout=300)
+        return response
     
-    def create_database_from_google_drive(self):
+    def create_database_from_gdrive(self):
         """Create database from both NCAA and OMBSB Fall26 data (both from Google Drive)"""
         try:
             progress_bar = st.progress(0)
+            session = requests.Session()  # Reuse session for efficiency
+            
             st.info("Downloading NCAA data from Google Drive...")
             
             # Download NCAA data
             ncaa_file_id = "1FmXytu8_iEDWeUm7JtHGVzQd5S4ru4eb"
-            ncaa_content = self.download_from_google_drive(ncaa_file_id, "NCAA data")
+            
+            response = self.download_from_gdrive(ncaa_file_id, session)
+            response.raise_for_status()
             progress_bar.progress(30)
             
-            ncaa_df = pd.read_parquet(BytesIO(ncaa_content))
+            ncaa_df = pd.read_parquet(BytesIO(response.content))
             st.success(f"NCAA data loaded: {len(ncaa_df):,} rows")
             progress_bar.progress(50)
             
-            # Download OMBSB Fall26 data (if available)
+            # Download OMBSB Fall26 data
             st.info("Downloading OMBSB Fall26 data from Google Drive...")
             try:
                 ombsb_file_id = "1u8ih1dzjXVBhSFXtRe6AbLPUtVMQPqdt"
-                ombsb_content = self.download_from_google_drive(ombsb_file_id, "OMBSB Fall26 data")
                 
-                ombsb_df = pd.read_parquet(BytesIO(ombsb_content))
+                ombsb_response = self.download_from_gdrive(ombsb_file_id, session)
+                ombsb_response.raise_for_status()
+                
+                ombsb_df = pd.read_parquet(BytesIO(ombsb_response.content))
                 st.success(f"OMBSB Fall26 data loaded: {len(ombsb_df):,} rows")
                 df = pd.concat([ncaa_df, ombsb_df], ignore_index=True)
                 st.success(f"Combined dataset: {len(df):,} rows")
@@ -172,6 +156,7 @@ class DatabaseManager:
             if 'ombsb_df' in locals():
                 del ombsb_df
             del df
+            session.close()  # Close the session
             
         except Exception as e:
             st.error(f"Error creating database: {e}")
@@ -233,6 +218,7 @@ class DatabaseManager:
         
         conn.close()
         return df
+
 
 def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     """Complete MAC analysis with ALL original logic preserved"""
