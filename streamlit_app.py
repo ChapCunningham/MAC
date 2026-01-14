@@ -53,6 +53,15 @@ def clean_numeric_column(series):
     """Convert a series to numeric, replacing non-numeric values with NaN - EXACT SAME as MAC_module"""
     return pd.to_numeric(series, errors='coerce')
 
+import os
+import sqlite3
+from io import BytesIO
+
+import pandas as pd
+import requests
+import streamlit as st
+
+
 class DatabaseManager:
     def __init__(self, db_path="baseball_data.db"):
         self.db_path = db_path
@@ -64,8 +73,27 @@ class DatabaseManager:
             st.info("Setting up database for first time use...")
             self.create_database_from_dropbox()
 
+    def download_from_gdrive(self, file_id, session=None):
+        """Download file from Google Drive (cookie-based large file confirm)"""
+        if session is None:
+            session = requests.Session()
+
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        response = session.get(url, stream=True, timeout=300)
+        response.raise_for_status()
+
+        # Handle large file confirmation
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                confirm_url = f"https://drive.google.com/uc?export=download&confirm={value}&id={file_id}"
+                response = session.get(confirm_url, stream=True, timeout=300)
+                response.raise_for_status()
+                break
+
+        return response
+
     def create_database_from_dropbox(self):
-        """Create database from both NCAA and CCBL data (both from Dropbox)"""
+        """Create database from NCAA (Dropbox) + OMBSB (Google Drive)"""
         try:
             progress_bar = st.progress(0)
             st.info("Downloading NCAA data from Dropbox...")
@@ -80,40 +108,45 @@ class DatabaseManager:
             st.success(f"NCAA data loaded: {len(ncaa_df):,} rows")
             progress_bar.progress(50)
 
-            # Download CCBL data (if available)
-            st.info("Downloading CCBL data from Dropbox...")
+            # Download OMBSB data - from Google Drive
+            st.info("Downloading OMBSB data from Google Drive...")
             try:
-                ccbl_url = "https://www.dropbox.com/scl/fi/xayqylfb2d8wnqr4p5jua/CCBL_current.parquet?rlkey=e1mqyzpgvp68iq1w1j171q3i6&st=3qy97zbg&dl=1"
+                gdrive_session = requests.Session()
+                ombsb_file_id = "1u8ih1dzjXVBhSFXtRe6AbLPUtVMQPqdt"
 
-                ccbl_response = requests.get(ccbl_url, timeout=180)
-                ccbl_response.raise_for_status()
+                ombsb_response = self.download_from_gdrive(ombsb_file_id, gdrive_session)
 
-                ccbl_df = pd.read_parquet(BytesIO(ccbl_response.content))
-                st.success(f"CCBL data loaded: {len(ccbl_df):,} rows")
-                df = pd.concat([ncaa_df, ccbl_df], ignore_index=True)
+                # Optional safety check (prevents "magic bytes" confusion)
+                if ombsb_response.content[:4] != b"PAR1":
+                    raise Exception("OMBSB download did not return a parquet file (likely Drive permissions/interstitial).")
+
+                ombsb_df = pd.read_parquet(BytesIO(ombsb_response.content))
+
+                st.success(f"OMBSB data loaded: {len(ombsb_df):,} rows")
+                df = pd.concat([ncaa_df, ombsb_df], ignore_index=True)
                 st.success(f"Combined dataset: {len(df):,} rows")
 
             except Exception as e:
-                st.warning(f"Could not load CCBL data: {e}")
+                st.warning(f"Could not load OMBSB data: {e}")
                 st.info("Using NCAA data only")
                 df = ncaa_df
 
             progress_bar.progress(70)
-
-
 
             # Create SQLite database
             conn = sqlite3.connect(self.db_path)
             df.to_sql('pitches', conn, if_exists='replace', index=False)
             progress_bar.progress(85)
 
-            # Create indexes
             cursor = conn.cursor()
-            cursor.execute("CREATE INDEX idx_pitcher ON pitches(Pitcher)")
-            cursor.execute("CREATE INDEX idx_batter ON pitches(Batter)")
-            cursor.execute("CREATE INDEX idx_pitcher_batter ON pitches(Pitcher, Batter)")
 
-            # Create summary tables
+            # Rerun-safe indexes
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pitcher ON pitches(Pitcher)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_batter ON pitches(Batter)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pitcher_batter ON pitches(Pitcher, Batter)")
+
+            # Rerun-safe summary table
+            cursor.execute("DROP TABLE IF EXISTS pitcher_summary")
             cursor.execute("""
                 CREATE TABLE pitcher_summary AS
                 SELECT 
@@ -137,8 +170,8 @@ class DatabaseManager:
 
             # Clean up memory
             del ncaa_df
-            if 'ccbl_df' in locals():
-                del ccbl_df
+            if 'ombsb_df' in locals():
+                del ombsb_df
             del df
 
         except Exception as e:
@@ -169,38 +202,43 @@ class DatabaseManager:
         """Get data for analysis - chunked approach for memory efficiency"""
         conn = self.get_connection()
 
-        # Get data in smaller chunks
-        placeholders = ','.join(['?' for _ in target_hitters])
-
-        query = f"""
-            SELECT * FROM pitches 
-            WHERE (Pitcher = ? OR Batter IN ({placeholders}))
-              AND RelSpeed IS NOT NULL 
-              AND InducedVertBreak IS NOT NULL 
-              AND HorzBreak IS NOT NULL 
-              AND SpinRate IS NOT NULL
-              AND Pitcher IS NOT NULL 
-              AND Batter IS NOT NULL
+        base_filters = """
+            RelSpeed IS NOT NULL 
+            AND InducedVertBreak IS NOT NULL 
+            AND HorzBreak IS NOT NULL 
+            AND SpinRate IS NOT NULL
+            AND Pitcher IS NOT NULL 
+            AND Batter IS NOT NULL
         """
 
-        params = [pitcher_name] + target_hitters
+        if not target_hitters:
+            query = f"""
+                SELECT * FROM pitches
+                WHERE Pitcher = ?
+                  AND {base_filters}
+            """
+            params = [pitcher_name]
+        else:
+            placeholders = ','.join(['?' for _ in target_hitters])
+            query = f"""
+                SELECT * FROM pitches 
+                WHERE (Pitcher = ? OR Batter IN ({placeholders}))
+                  AND {base_filters}
+            """
+            params = [pitcher_name] + target_hitters
 
-        # Try chunked reading, fall back to regular if not supported
         try:
-            # Read in chunks to manage memory
             chunk_size = 10000
             chunks = []
-
             for chunk in pd.read_sql_query(query, conn, params=params, chunksize=chunk_size):
                 chunks.append(chunk)
-
             df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
         except TypeError:
-            # chunksize not supported in some pandas versions, read all at once
             df = pd.read_sql_query(query, conn, params=params)
 
         conn.close()
         return df
+
 
 def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     """Complete MAC analysis with ALL original logic preserved"""
