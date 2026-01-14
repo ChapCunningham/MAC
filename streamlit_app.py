@@ -56,24 +56,10 @@ def clean_numeric_column(series):
 
 
 import os
-import sqlite3
-import pandas as pd
-import streamlit as st
-import requests
-from io import BytesIO
-
-import os
-import sqlite3
-import pandas as pd
-import streamlit as st
-import requests
-from io import BytesIO
-import re
-
-import os
 import re
 import sqlite3
 import tempfile
+from io import BytesIO
 from typing import List, Optional
 
 import pandas as pd
@@ -97,103 +83,97 @@ class DatabaseManager:
     # -------------------------
 
     @staticmethod
-    def _looks_like_html(response: requests.Response) -> bool:
+    def _is_html(response: requests.Response) -> bool:
         ct = (response.headers.get("content-type") or "").lower()
         if "text/html" in ct:
             return True
-        # Sometimes CT lies; sniff a small prefix.
+        # Sometimes headers are misleading; sniff bytes.
         try:
-            prefix = response.content[:200].lower()
-            return b"<html" in prefix or b"<!doctype html" in prefix
+            head = response.content[:200].lower()
+            return b"<html" in head or b"<!doctype html" in head
         except Exception:
             return False
 
     @staticmethod
-    def _is_permissions_page(response: requests.Response, html: str) -> bool:
-        # Heuristics: redirect to accounts, "sign in", "request access", etc.
-        url = (response.url or "").lower()
-        h = (html or "").lower()
-        if "accounts.google.com" in url:
-            return True
-        keywords = ["sign in", "request access", "need access", "to continue to google drive"]
-        return any(k in h for k in keywords)
-
-    @staticmethod
     def _extract_confirm_token(html: str) -> Optional[str]:
         """
-        Extract the confirm token from various Drive warning/confirm pages.
-        This is intentionally "broad" to survive minor HTML changes.
+        Extract a Drive confirm token from HTML (fallback for newer interstitials).
         """
         if not html:
             return None
-
-        # Most common: confirm=XXXX in any link/script
         m = re.search(r"confirm=([0-9A-Za-z\-_]+)", html)
         if m:
             return m.group(1)
-
-        # Some pages have an input named confirm
         m = re.search(r'name="confirm"\s+value="([^"]+)"', html, flags=re.IGNORECASE)
         if m:
             return m.group(1)
-
-        # Older pattern: /uc?export=download&confirm=XXXX (possibly with &amp;)
-        m = re.search(r"/uc\?export=download(?:&amp;|&)\s*confirm=([0-9A-Za-z\-_]+)", html)
-        if m:
-            return m.group(1)
-
         return None
 
-    def download_from_gdrive(self, file_id: str, session: requests.Session, timeout: int = 300) -> str:
+    def download_from_gdrive_to_tempfile(
+        self,
+        file_id: str,
+        session: requests.Session,
+        suffix: str = ".parquet",
+        timeout: int = 300,
+    ) -> str:
         """
-        Download a Google Drive file to a temporary file and return its path.
-        Handles large-file warning (confirm token) and permissions pages.
-
-        Raises Exception with a helpful message on failure.
+        Download a Google Drive file to a temporary local file.
+        Strategy:
+          1) Initial GET to uc?export=download&id=...
+          2) If HTML, try 'download_warning' cookie confirm (your working technique)
+          3) If still HTML, parse confirm token from HTML and retry
+          4) If still HTML, raise (likely permissions or org restriction)
+        Returns: local temp file path
         """
-        base_url = "https://drive.google.com/uc"
-        params = {"export": "download", "id": file_id}
+        base_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
-        # First request
-        r = session.get(base_url, params=params, stream=True, timeout=timeout, allow_redirects=True)
+        r = session.get(base_url, stream=True, timeout=timeout, allow_redirects=True)
         r.raise_for_status()
 
-        # If we got HTML, it may be a warning page or permissions page
-        if self._looks_like_html(r):
-            html = r.text
+        # 1) Cookie-based large file confirmation (your technique)
+        if self._is_html(r):
+            confirm_value = None
+            for k, v in r.cookies.items():
+                if k.startswith("download_warning"):
+                    confirm_value = v
+                    break
+            if confirm_value:
+                confirm_url = f"https://drive.google.com/uc?export=download&confirm={confirm_value}&id={file_id}"
+                r = session.get(confirm_url, stream=True, timeout=timeout, allow_redirects=True)
+                r.raise_for_status()
 
-            if self._is_permissions_page(r, html):
+        # 2) Fallback: parse confirm token from HTML (newer Drive interstitials)
+        if self._is_html(r):
+            html = r.text or ""
+            lower = html.lower()
+            # Common permissions signals
+            if (
+                "request access" in lower
+                or "sign in" in lower
+                or "accounts.google.com" in (r.url or "").lower()
+                or "to continue to google drive" in lower
+            ):
                 raise Exception(
                     f"Google Drive file {file_id} is not publicly accessible. "
-                    "Set sharing to 'Anyone with the link' (Viewer) or use a service account / authenticated method."
+                    "Set sharing to 'Anyone with the link' (Viewer), or use authenticated download."
                 )
 
             token = self._extract_confirm_token(html)
             if token:
-                # Retry with confirm token
-                r = session.get(
-                    base_url,
-                    params={"export": "download", "confirm": token, "id": file_id},
-                    stream=True,
-                    timeout=timeout,
-                    allow_redirects=True,
-                )
+                confirm_url = f"https://drive.google.com/uc?export=download&confirm={token}&id={file_id}"
+                r = session.get(confirm_url, stream=True, timeout=timeout, allow_redirects=True)
                 r.raise_for_status()
 
-                # Still HTML after token => likely not accessible or Drive changed flow
-                if self._looks_like_html(r):
-                    raise Exception(
-                        f"Unable to download Google Drive file {file_id}: still receiving HTML after confirmation. "
-                        "Likely permissions, or Drive changed the confirm flow."
-                    )
-            else:
-                raise Exception(
-                    f"Unable to download Google Drive file {file_id}: received HTML but could not find a confirmation token. "
-                    "Likely permissions, or Drive changed the confirm flow."
-                )
+        # 3) Still HTML => fail
+        if self._is_html(r):
+            raise Exception(
+                f"Unable to download Google Drive file {file_id}: still receiving HTML. "
+                "This is almost always permissions (not public / org-restricted) or a Drive interstitial "
+                "that requires authenticated download."
+            )
 
-        # Stream to a temp file (avoids loading the whole file into memory)
-        fd, tmp_path = tempfile.mkstemp(suffix=".parquet")
+        # Stream to temp file (prevents huge RAM usage vs response.content)
+        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
         os.close(fd)
 
         try:
@@ -202,26 +182,25 @@ class DatabaseManager:
                     if chunk:
                         f.write(chunk)
 
-            # Quick parquet sanity check (PAR1)
+            # Parquet sanity check: "PAR1"
             with open(tmp_path, "rb") as f:
                 magic = f.read(4)
             if magic != b"PAR1":
-                # If it's actually HTML, show a clearer error
+                # Might have saved HTML anyway
                 with open(tmp_path, "rb") as f:
                     head = f.read(200).lower()
                 if b"<html" in head or b"<!doctype html" in head:
                     raise Exception(
-                        f"Downloaded HTML instead of a parquet file for {file_id}. "
-                        "This almost always means the file is not public or requires login."
+                        f"Downloaded HTML instead of parquet for file {file_id}. "
+                        "Check sharing permissions ('Anyone with the link')."
                     )
                 raise Exception(
-                    f"Downloaded file for {file_id} does not look like a parquet file (missing PAR1 header)."
+                    f"Downloaded file for {file_id} does not look like parquet (missing PAR1 header)."
                 )
 
             return tmp_path
 
         except Exception:
-            # If anything goes wrong, ensure temp file is removed
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -234,39 +213,37 @@ class DatabaseManager:
     # -------------------------
 
     def create_database_from_gdrive(self):
-        """Create database from NCAA and (optionally) OMBSB Fall26 Google Drive parquet files."""
+        """Create database from NCAA + OMBSB Fall26 Google Drive parquet files."""
         progress_bar = None
         session = None
+        conn = None
         ncaa_path = None
         ombsb_path = None
-        conn = None
 
         try:
             progress_bar = st.progress(0)
             session = requests.Session()
 
-            # ---- NCAA ----
+            # ---- Download + load NCAA ----
             st.info("Downloading NCAA data from Google Drive...")
             ncaa_file_id = "1FmXytu8_iEDWeUm7JtHGVzQd5S4ru4eb"
-            ncaa_path = self.download_from_gdrive(ncaa_file_id, session)
 
-            ncaa_size = os.path.getsize(ncaa_path)
-            st.info(f"NCAA file downloaded: {ncaa_size:,} bytes")
+            ncaa_path = self.download_from_gdrive_to_tempfile(ncaa_file_id, session, suffix=".parquet")
+            st.info(f"NCAA file downloaded: {os.path.getsize(ncaa_path):,} bytes")
             progress_bar.progress(25)
 
             ncaa_df = pd.read_parquet(ncaa_path)
             st.success(f"NCAA data loaded: {len(ncaa_df):,} rows")
             progress_bar.progress(45)
 
-            # ---- OMBSB (optional) ----
             df = ncaa_df
+
+            # ---- Download + load OMBSB (optional) ----
             st.info("Downloading OMBSB Fall26 data from Google Drive...")
             try:
                 ombsb_file_id = "1u8ih1dzjXVBhSFXtRe6AbLPUtVMQPqdt"
-                ombsb_path = self.download_from_gdrive(ombsb_file_id, session)
-
-                ombsb_size = os.path.getsize(ombsb_path)
-                st.info(f"OMBSB file downloaded: {ombsb_size:,} bytes")
+                ombsb_path = self.download_from_gdrive_to_tempfile(ombsb_file_id, session, suffix=".parquet")
+                st.info(f"OMBSB file downloaded: {os.path.getsize(ombsb_path):,} bytes")
                 progress_bar.progress(55)
 
                 ombsb_df = pd.read_parquet(ombsb_path)
@@ -284,7 +261,7 @@ class DatabaseManager:
             # ---- Create SQLite database ----
             conn = sqlite3.connect(self.db_path)
 
-            # Replace pitches table
+            # Replace main table
             df.to_sql("pitches", conn, if_exists="replace", index=False)
             progress_bar.progress(82)
 
@@ -307,7 +284,7 @@ class DatabaseManager:
                     AVG(InducedVertBreak) as avg_ivb,
                     AVG(HorzBreak) as avg_hb,
                     AVG(SpinRate) as avg_spin
-                FROM pitches
+                FROM pitches 
                 WHERE RelSpeed IS NOT NULL
                   AND InducedVertBreak IS NOT NULL
                   AND HorzBreak IS NOT NULL
@@ -327,19 +304,21 @@ class DatabaseManager:
             raise
 
         finally:
-            # Clean up
+            # Close DB
             try:
                 if conn is not None:
                     conn.close()
             except Exception:
                 pass
 
+            # Close session
             try:
                 if session is not None:
                     session.close()
             except Exception:
                 pass
 
+            # Remove temp files
             for p in [ncaa_path, ombsb_path]:
                 try:
                     if p and os.path.exists(p):
@@ -420,6 +399,7 @@ class DatabaseManager:
 
         finally:
             conn.close()
+
 ### end of database class
 def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     """Complete MAC analysis with ALL original logic preserved"""
