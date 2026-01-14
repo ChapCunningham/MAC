@@ -12,6 +12,7 @@ import matplotlib.patches as patches
 from scipy import ndimage
 from scipy.interpolate import griddata
 import base64
+import re
 
 # Memory-efficient imports - only import when needed
 @st.cache_resource
