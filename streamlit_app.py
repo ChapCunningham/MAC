@@ -62,6 +62,14 @@ import streamlit as st
 import requests
 from io import BytesIO
 
+import os
+import sqlite3
+import pandas as pd
+import streamlit as st
+import requests
+from io import BytesIO
+import re
+
 class DatabaseManager:
     def __init__(self, db_path="baseball_data.db"):
         self.db_path = db_path
@@ -74,9 +82,60 @@ class DatabaseManager:
             self.create_database_from_gdrive()
     
     def download_from_gdrive(self, file_id, session):
-        """Simple Google Drive download using direct download URL"""
+        """Download from Google Drive with virus scan handling"""
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
         response = session.get(url, timeout=300)
+        
+        # Check if we got HTML (virus scan warning) instead of the file
+        content_type = response.headers.get('content-type', '').lower()
+        
+        if 'text/html' in content_type:
+            st.info("Handling Google Drive virus scan warning...")
+            
+            # Look for the confirmation token in the HTML
+            response_text = response.text
+            
+            # Try multiple patterns to find the confirmation token
+            confirm_token = None
+            
+            # Pattern 1: Look for confirm parameter in download links
+            confirm_match = re.search(r'/uc\?export=download&amp;confirm=([a-zA-Z0-9\-_]+)', response_text)
+            if confirm_match:
+                confirm_token = confirm_match.group(1)
+            
+            # Pattern 2: Look for form with confirm input
+            if not confirm_token:
+                form_match = re.search(r'<form[^>]*action="[^"]*uc[^"]*"[^>]*>(.*?)</form>', response_text, re.DOTALL | re.IGNORECASE)
+                if form_match:
+                    form_content = form_match.group(1)
+                    input_match = re.search(r'<input[^>]*name="confirm"[^>]*value="([^"]*)"', form_content, re.IGNORECASE)
+                    if input_match:
+                        confirm_token = input_match.group(1)
+            
+            # Pattern 3: Look in any scripts for confirm value
+            if not confirm_token:
+                script_match = re.search(r'"confirm"\s*:\s*"([^"]+)"', response_text)
+                if script_match:
+                    confirm_token = script_match.group(1)
+            
+            if confirm_token:
+                st.info(f"Found confirmation token, downloading file...")
+                confirmed_url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
+                response = session.get(confirmed_url, timeout=300)
+                response.raise_for_status()
+            else:
+                # Try alternative approach - sometimes the download works with a different URL format
+                st.info("Trying alternative download method...")
+                alt_url = f"https://drive.google.com/u/0/uc?id={file_id}&export=download&confirm=t"
+                response = session.get(alt_url, timeout=300)
+                response.raise_for_status()
+                
+                # Check if we still got HTML
+                content_type = response.headers.get('content-type', '').lower()
+                if 'text/html' in content_type:
+                    raise Exception(f"Unable to download file {file_id}. The file may be too large, not publicly accessible, or require different sharing permissions.")
+        
+        response.raise_for_status()
         return response
     
     def create_database_from_gdrive(self):
@@ -92,6 +151,12 @@ class DatabaseManager:
             
             response = self.download_from_gdrive(ncaa_file_id, session)
             response.raise_for_status()
+            
+            # Debug info
+            content_length = len(response.content)
+            content_type = response.headers.get('content-type', 'unknown')
+            st.info(f"NCAA download: {content_length:,} bytes, type: {content_type}")
+            
             progress_bar.progress(30)
             
             ncaa_df = pd.read_parquet(BytesIO(response.content))
@@ -105,6 +170,11 @@ class DatabaseManager:
                 
                 ombsb_response = self.download_from_gdrive(ombsb_file_id, session)
                 ombsb_response.raise_for_status()
+                
+                # Debug info
+                ombsb_content_length = len(ombsb_response.content)
+                ombsb_content_type = ombsb_response.headers.get('content-type', 'unknown')
+                st.info(f"OMBSB download: {ombsb_content_length:,} bytes, type: {ombsb_content_type}")
                 
                 ombsb_df = pd.read_parquet(BytesIO(ombsb_response.content))
                 st.success(f"OMBSB Fall26 data loaded: {len(ombsb_df):,} rows")
@@ -218,7 +288,6 @@ class DatabaseManager:
         
         conn.close()
         return df
-
 
 def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
     """Complete MAC analysis with ALL original logic preserved"""
