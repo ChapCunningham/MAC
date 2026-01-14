@@ -1163,7 +1163,7 @@ def create_matchup_rankings_table(matchups_df, hitter_order):
         return None
 
     # Create pivot table for better visualization
-    pivot_df = matchups_df.pivot(index='Pitcher', columns='Hitter', values='RV/100')
+    pivot_df = matchups_df.pivot_table(index='Pitcher', columns='Hitter', values='RV/100')
 
     # Reorder columns to match the original hitter input order
     # Only include hitters that actually exist in the data
