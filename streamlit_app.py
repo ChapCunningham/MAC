@@ -1262,14 +1262,16 @@ def main():
         "hitters": [
             "Harvey, Jake",
             "Waller, Jackson",
-            "Aloy, Wehiwa",
-            "Tinney, Carson",
-            "Davalan, Charles",
-            "Hill, Luke",
-            "Utermark, Judd", 
-            "Bargo, Dalton",
-            "Kerce, Carson",
-            "Cuvet, Daniel"
+            "Kwon, Junhyuk",
+            "Hirata, Mason",
+            "Dobie, Jayce",
+            "Yamaguchi, Sean",
+            "Metcho, Jack", 
+            "Kane, Sam",
+            "Snakenborg, Nate",
+            "Ham, Billy",
+            "Doyle, Jacob",
+            "Cruz Jr., Michael"
 
         ],
         "hot_arms": [
