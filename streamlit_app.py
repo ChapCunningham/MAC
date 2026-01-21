@@ -1157,36 +1157,51 @@ def analyze_hot_arms_strategy(hot_arms, selected_hitters, db_manager):
 
     return pd.DataFrame(all_matchups), pitcher_summaries
 
+
 def create_matchup_rankings_table(matchups_df, hitter_order):
     """Create color-coded pitcher matchup rankings with preserved hitter order"""
     if matchups_df.empty:
         return None
 
-    # Create pivot table for better visualization
-    pivot_df = matchups_df.pivot_table(index='Pitcher', columns='Hitter', values='RV/100')
+    # Create a combined display column with RV/100 and pitch count
+    matchups_df = matchups_df.copy()
+    matchups_df['Display_Value'] = matchups_df.apply(
+        lambda row: f"{row['RV/100']:.2f} ({int(row['Pitches'])}P)", axis=1
+    )
+
+    # Create pivot table for better visualization using the display value
+    pivot_df = matchups_df.pivot_table(index='Pitcher', columns='Hitter', values='Display_Value', aggfunc='first')
 
     # Reorder columns to match the original hitter input order
     # Only include hitters that actually exist in the data
     available_hitters = [h for h in hitter_order if h in pivot_df.columns]
     pivot_df = pivot_df[available_hitters]
 
-    # Create styled dataframe
+    # Create styled dataframe - extract numeric value for coloring
     def color_rv_values(val):
-        if pd.isna(val):
+        if pd.isna(val) or val == '':
             return 'background-color: lightgray'
-        elif val < -2:
+        
+        # Extract the RV/100 numeric value from the display string for coloring
+        try:
+            rv_value = float(val.split(' ')[0])
+        except (ValueError, AttributeError, IndexError):
+            return 'background-color: lightgray'
+            
+        if rv_value < -2:
             return 'background-color: darkgreen; color: white'  # Excellent for pitcher
-        elif val < 0:
+        elif rv_value < 0:
             return 'background-color: lightgreen'  # Good for pitcher
-        elif val < 2:
+        elif rv_value < 2:
             return 'background-color: lightyellow'  # Neutral
-        elif val < 5:
+        elif rv_value < 5:
             return 'background-color: lightcoral'  # Bad for pitcher
         else:
             return 'background-color: darkred; color: white'  # Very bad for pitcher
 
-    styled_df = pivot_df.style.applymap(color_rv_values).format(precision=2)
+    styled_df = pivot_df.style.applymap(color_rv_values)
     return styled_df
+
 
 def create_optimal_usage_recommendations(matchups_df, pitcher_summaries):
     """Generate strategic usage recommendations"""
