@@ -1286,7 +1286,7 @@ def main():
             "Snakenborg, Nate",
             "Ham, Billy",
             "Doyle, Jacob",
-            "Cruz Jr., Michael"
+            "Cruz Jr., Mikey"
 
         ],
         "hot_arms": [
