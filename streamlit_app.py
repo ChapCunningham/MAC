@@ -1275,18 +1275,20 @@ def main():
     DEFAULT_CONFIG = {
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
-            "Harvey, Jake",
-            "Waller, Jackson",
-            "Kwon, Junhyuk",
-            "Hirata, Mason",
-            "Dobie, Jayce",
-            "Yamaguchi, Sean",
-            "Metcho, Jack", 
-            "Kane, Sam",
-            "Snakenborg, Nate",
-            "Ham, Billy",
-            "Doyle, Jacob",
-            "Cruz Jr., Mikey"
+            
+            "Roessler, Gabe",
+            "Bogenpohl, Cade",
+            "Gollert, Taeg",
+            "Atkinson, Bobby",
+            "Sutherland, Curry",
+            "Knight, Max",
+            "Ryan, Jax",
+            "Cermenelli, Bryce",
+            "Carter, Charlie",
+            "Bergman, Carter",
+            "Fyffe, Logan",
+            "Beaman, Jackson",
+            "Kragel, Brant"
 
         ],
         "hot_arms": [
