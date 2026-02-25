@@ -1276,19 +1276,19 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
             
-            "Roessler, Gabe",
-            "Bogenpohl, Cade",
-            "Gollert, Taeg",
-            "Atkinson, Bobby",
-            "Sutherland, Curry",
-            "Knight, Max",
-            "Ryan, Jax",
-            "Cermenelli, Bryce",
-            "Carter, Charlie",
-            "Bergman, Carter",
-            "Fyffe, Logan",
-            "Beaman, Jackson",
-            "Kragel, Brant"
+            "Sanders, Travis",
+            "Riebock, Pearson",
+            "Armstrong, Tyce",
+            "Janusek, Brady",
+            "Johnson, Ty",
+            "Buchanan, Brayden",
+            "Clements, Brytton",
+            "Snow, Hunter",
+            "Caraway, Bo",
+            "Bergman, Caleb",
+            "Dodson, Cade",
+            "Youens, John",
+            "Kennett, JJ",
 
         ],
         "hot_arms": [
