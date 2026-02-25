@@ -1276,16 +1276,17 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
             
-            "Vandenhuevel, Miles",
-            "Ellis, Lee",
-            "Eckelman, Mason",
-            "Furcht, Noah",
-            "Kaczmar, Henry",
-            "Reid, CJ",
-            "Simpson, Maddix",
-            "Bemis, Alex",
-            "West, Gavin",
-            "Harvey, Dane"
+            "Mihos, Dean",
+            "Mazon, Trace",
+            "Barthol, Blake",
+            "Mitchell, Walker",
+            "Watson, Rex",
+            "Taylor, Jordan",
+            "Pado, Blagen",
+            "Tozzi, Domenico",
+            "Thorndyke, Colby",
+            "Barrango, Ty",
+            "Estep, Brice"
 
         ],
         "hot_arms": [
