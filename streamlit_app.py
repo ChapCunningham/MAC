@@ -1137,7 +1137,7 @@ def create_matchup_rankings_table(matchups_df, hitter_order):
         else:
             return 'background-color: darkred; color: white'  # Very bad for pitcher
 
-    styled_df = pivot_df.style.applymap(color_rv_values)
+    styled_df = pivot_df.style.map(color_rv_values)
     return styled_df
 
 
