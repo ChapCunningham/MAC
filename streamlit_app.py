@@ -92,33 +92,30 @@ class DatabaseManager:
 
         return response
 
+
     def create_database_from_dropbox(self):
+        import gdown
         st.info("Downloading database...")
         progress_bar = st.progress(0)
     
-        gdrive_session = requests.Session()
         db_file_id = "1Px70gCfMa75te9QiSgJD4ZnJc2sI0oM2"
-    
-        response = self.download_from_gdrive(db_file_id, gdrive_session)
-        progress_bar.progress(25)
-    
-        with open(self.db_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+        url = f"https://drive.google.com/uc?id={db_file_id}"
+        
+        gdown.download(url, self.db_path, quiet=False)
+        progress_bar.progress(75)
     
         # Verify it's actually a SQLite file
         with open(self.db_path, 'rb') as f:
             header = f.read(16)
         if not header.startswith(b'SQLite format 3'):
             os.remove(self.db_path)
-            raise Exception("Downloaded file is not a valid SQLite database. Check that the Google Drive file is shared as 'Anyone with the link can view'.")
+            raise Exception("Downloaded file is not a valid SQLite database. Check Drive permissions.")
     
         progress_bar.progress(100)
         st.success("Database ready!")
+
+
     
-        progress_bar.progress(100)
-        st.success("Database ready!")
     def get_connection(self):
         """Get database connection"""
         return sqlite3.connect(self.db_path)
