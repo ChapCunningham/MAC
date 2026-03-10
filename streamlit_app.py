@@ -102,11 +102,20 @@ class DatabaseManager:
         response = self.download_from_gdrive(db_file_id, gdrive_session)
         progress_bar.progress(25)
     
-        # Stream write in chunks instead of loading all into memory at once
         with open(self.db_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+    
+        # Verify it's actually a SQLite file
+        with open(self.db_path, 'rb') as f:
+            header = f.read(16)
+        if not header.startswith(b'SQLite format 3'):
+            os.remove(self.db_path)
+            raise Exception("Downloaded file is not a valid SQLite database. Check that the Google Drive file is shared as 'Anyone with the link can view'.")
+    
+        progress_bar.progress(100)
+        st.success("Database ready!")
     
         progress_bar.progress(100)
         st.success("Database ready!")
