@@ -1281,6 +1281,7 @@ def main():
             "Robbins, Aiden",
             "Rodriguez, Adrian",
             "Becerra, Temo",
+            "Pack Jr., Anthony",
             "Borba, Casey",
             "Larson, Ashton",
             "Williams, Jonah",
