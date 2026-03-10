@@ -1214,17 +1214,20 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
             
-            "Higdon, Ben",
-            "Urban, Joseph",
-            "Russo, Matthew",
-            "Gillespie, Davis",
-            "Barrett, Drey",
-            "Morrison, Kyle",
-            "Stockman, Tucker",
-            "Smith, Seth",
-            "Stelly, Caleb",
-            "Tonsmeire, William",
-            "Odom, Lawson"
+            "Mendoza, Ethan",
+            "Tinney, Carson",
+            "Robbins, Aiden",
+            "Rodriguez, Adrian",
+            "Becerra, Temo",
+            "Pack Jr., Anthony",
+            "Borba, Casey",
+            "Larson, Ashton",
+            "Williams, Jonah",
+            "Ermis, Andrew",
+            "Livingston, Josh",
+            "Early, Callum",
+            "Pendergrass, Dariyan"
+            
             
 
         ],
