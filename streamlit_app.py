@@ -113,7 +113,7 @@ class DatabaseManager:
             try:
                 gdrive_session = requests.Session()
                 ombsb_file_id = "1u8ih1dzjXVBhSFXtRe6AbLPUtVMQPqdt"
-
+                    
                 ombsb_response = self.download_from_gdrive(ombsb_file_id, gdrive_session)
 
                 # Optional safety check (prevents "magic bytes" confusion)
@@ -1276,17 +1276,19 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
             
-            "Mihos, Dean",
-            "Mazon, Trace",
-            "Barthol, Blake",
-            "Mitchell, Walker",
-            "Watson, Rex",
-            "Taylor, Jordan",
-            "Pado, Blagen",
-            "Tozzi, Domenico",
-            "Thorndyke, Colby",
-            "Barrango, Ty",
-            "Estep, Brice"
+            "Mendoza, Ethan",
+            "Tinney, Carson",
+            "Robbins, Aiden",
+            "Rodriguez, Adrian",
+            "Becerra, Temo",
+            "Borba, Casey",
+            "Larson, Ashton",
+            "Williams, Jonah",
+            "Ermis, Andrew",
+            "Livingston, Josh",
+            "Early, Cal",
+            "Pendergrass, Dariyan"
+            
 
         ],
         "hot_arms": [
