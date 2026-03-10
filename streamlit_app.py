@@ -93,91 +93,23 @@ class DatabaseManager:
         return response
 
     def create_database_from_dropbox(self):
-        """Create database from NCAA (Dropbox) + OMBSB (Google Drive)"""
-        try:
-            progress_bar = st.progress(0)
-            st.info("Downloading NCAA data from Dropbox...")
-
-            # Download NCAA data
-            ncaa_url = "https://www.dropbox.com/scl/fi/c5jpffe349ejtboynvbab/NCAA_final_compressed.parquet?rlkey=u9q96ge9z5aenb2ttnecb46uo&st=co7eyva9&dl=1"
-            response = requests.get(ncaa_url, timeout=300)
-            response.raise_for_status()
-            progress_bar.progress(30)
-
-            ncaa_df = pd.read_parquet(BytesIO(response.content))
-            st.success(f"NCAA data loaded: {len(ncaa_df):,} rows")
-            progress_bar.progress(50)
-
-            # Download OMBSB data - from Google Drive
-            st.info("Downloading OMBSB data from Google Drive...")
-            try:
-                gdrive_session = requests.Session()
-                ombsb_file_id = "1u8ih1dzjXVBhSFXtRe6AbLPUtVMQPqdt"
-                    
-                ombsb_response = self.download_from_gdrive(ombsb_file_id, gdrive_session)
-
-                # Optional safety check (prevents "magic bytes" confusion)
-                if ombsb_response.content[:4] != b"PAR1":
-                    raise Exception("OMBSB download did not return a parquet file (likely Drive permissions/interstitial).")
-
-                ombsb_df = pd.read_parquet(BytesIO(ombsb_response.content))
-
-                st.success(f"OMBSB data loaded: {len(ombsb_df):,} rows")
-                df = pd.concat([ncaa_df, ombsb_df], ignore_index=True)
-                st.success(f"Combined dataset: {len(df):,} rows")
-
-            except Exception as e:
-                st.warning(f"Could not load OMBSB data: {e}")
-                st.info("Using NCAA data only")
-                df = ncaa_df
-
-            progress_bar.progress(70)
-
-            # Create SQLite database
-            conn = sqlite3.connect(self.db_path)
-            df.to_sql('pitches', conn, if_exists='replace', index=False)
-            progress_bar.progress(85)
-
-            cursor = conn.cursor()
-
-            # Rerun-safe indexes
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pitcher ON pitches(Pitcher)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_batter ON pitches(Batter)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pitcher_batter ON pitches(Pitcher, Batter)")
-
-            # Rerun-safe summary table
-            cursor.execute("DROP TABLE IF EXISTS pitcher_summary")
-            cursor.execute("""
-                CREATE TABLE pitcher_summary AS
-                SELECT 
-                    Pitcher,
-                    COUNT(*) as total_pitches,
-                    AVG(RelSpeed) as avg_speed,
-                    AVG(InducedVertBreak) as avg_ivb,
-                    AVG(HorzBreak) as avg_hb,
-                    AVG(SpinRate) as avg_spin
-                FROM pitches 
-                WHERE RelSpeed IS NOT NULL AND InducedVertBreak IS NOT NULL 
-                  AND HorzBreak IS NOT NULL AND SpinRate IS NOT NULL
-                GROUP BY Pitcher
-                HAVING COUNT(*) >= 10
-            """)
-
-            conn.commit()
-            conn.close()
-            progress_bar.progress(100)
-            st.success("Database created successfully!")
-
-            # Clean up memory
-            del ncaa_df
-            if 'ombsb_df' in locals():
-                del ombsb_df
-            del df
-
-        except Exception as e:
-            st.error(f"Error creating database: {e}")
-            raise
-
+        st.info("Downloading database...")
+        progress_bar = st.progress(0)
+    
+        gdrive_session = requests.Session()
+        db_file_id = "1Px70gCfMa75te9QiSgJD4ZnJc2sI0oM2"
+    
+        response = self.download_from_gdrive(db_file_id, gdrive_session)
+        progress_bar.progress(25)
+    
+        # Stream write in chunks instead of loading all into memory at once
+        with open(self.db_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+    
+        progress_bar.progress(100)
+        st.success("Database ready!")
     def get_connection(self):
         """Get database connection"""
         return sqlite3.connect(self.db_path)
