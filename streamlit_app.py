@@ -34,7 +34,13 @@ st.set_page_config(
 )
 
 # Constants - EXACT SAME as MAC_module
-color_dict = {"Fastball": "red", "Breaking": "blue", "Offspeed": "green", "Unknown": "gray"}
+
+color_dict = {
+    "Four-Seam": "red", "FourSeamFastBall": "red", "TwoSeamFastBall": "yellow", "Sinker": "yellow",
+    "Slider": "blue", "Curveball": "blue", "Cutter": "orange", "Sweeper": "purple",
+    "Changeup": "green", "ChangeUp": "green", "Splitter": "green",
+    "Unknown": "gray", "Breaking": "blue", "Offspeed": "green", "Fastball": "red"
+}
 distance_threshold = 0.6
 strike_zone = {"top": 3.3775, "bottom": 1.5, "left": -0.83083, "right": 0.83083}
 swing_calls = ["StrikeSwinging", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"]
@@ -310,9 +316,10 @@ def run_complete_mac_analysis(pitcher_name, target_hitters, db_manager):
                 cluster_to_type[cluster] = 'Unknown'
                 continue
 
+            #NEW CLUSTERING METHOD FOR NAMING#
             most_common_type = type_counts.idxmax()
-            pitch_group = autopitchtype_to_group.get(most_common_type, 'Unknown')
-            cluster_to_type[cluster] = pitch_group
+            cluster_to_type[cluster] = most_common_type
+            #NEW CLUSTERING METHOD#
 
         pitcher_pitches['PitchGroup'] = pitcher_pitches['PitchCluster'].map(cluster_to_type)
 
