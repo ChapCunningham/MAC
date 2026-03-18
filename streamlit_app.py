@@ -1214,19 +1214,20 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
             
-            "Mendoza, Ethan",
-            "Tinney, Carson",
-            "Robbins, Aiden",
-            "Rodriguez, Adrian",
-            "Becerra, Temo",
-            "Pack Jr., Anthony",
-            "Borba, Casey",
-            "Larson, Ashton",
-            "Williams, Jonah",
-            "Ermis, Andrew",
-            "Livingston, Josh",
-            "Early, Callum",
-            "Pendergrass, Dariyan"
+            "Tharnish, Jayce",
+            "Lawrence, Luke",
+            "Hindle, Ethan",
+            "Bell, Tyler",
+            "Brown, Hudson",
+            "Campbell, Scott", 
+            "Cloud, Caeden",
+            "Schwartz, Ryan",
+            "Cerny, Tyler",
+            "Jenkinks, Owen",
+            "Hansen, Carson",
+            "Tyson, Tagger",
+            "Marcy, Will",
+            "Duffey, Alex"
             
             
 
