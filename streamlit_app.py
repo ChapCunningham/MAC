@@ -1203,6 +1203,7 @@ def create_optimal_usage_recommendations(matchups_df, pitcher_summaries):
 
 def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
     from openpyxl.formatting.rule import ColorScaleRule
+    from openpyxl.styles import Font
 
     autopitchtype_to_group = {
         'Four-Seam': 'Fastball', 'Fastball': 'Fastball', 'FourSeamFastBall': 'Fastball',
@@ -1210,6 +1211,18 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
         'Cutter': 'Breaking', 'Curveball': 'Breaking', 'Sweeper': 'Breaking',
         'Changeup': 'Offspeed', 'Splitter': 'Offspeed', 'ChangeUp': 'Offspeed'
     }
+
+    # Abbreviation map for Matchup Matrix sheet
+    PITCH_ABBREV = {
+        'Four-Seam': 'FB', 'FourSeamFastBall': 'FB', 'Fastball': 'FB',
+        'TwoSeamFastBall': 'SI', 'Sinker': 'SI',
+        'Cutter': 'CT',
+        'Slider': 'SL', 'Sweeper': 'SL',
+        'Curveball': 'CB',
+        'Changeup': 'CH', 'ChangeUp': 'CH',
+        'Splitter': 'SP',
+    }
+    PITCH_ORDER = ['FB', 'SI', 'CT', 'SL', 'CB', 'CH', 'SP']
 
     output              = BytesIO()
     all_summaries       = []
@@ -1256,9 +1269,8 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                 s = pd.concat([s, pd.DataFrame([all_row])], ignore_index=True)
                 all_summaries.append(s)
 
-            # ── Sheet 2: per pitcher + TaggedPitchType + batter ──────────────
+            # ── Sheets 2 & 3: per pitcher + TaggedPitchType + batter ─────────
             if full_df is not None and not full_df.empty:
-                # Pitcher's OWN pitches - for arsenal characteristics only
                 pitcher_rows = full_df[full_df['Pitcher'] == pitcher].copy()
 
                 if not pitcher_rows.empty and 'TaggedPitchType' in pitcher_rows.columns:
@@ -1267,22 +1279,14 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
 
                     for pitch_type, type_grp in pitcher_rows.groupby('TaggedPitchType'):
                         pitch_group = autopitchtype_to_group.get(pitch_type, 'Unknown')
-
-                        # Arsenal characteristics from pitcher's own pitches
-                        n_arsenal = len(type_grp)
-                        usage_pct = round(100 * n_arsenal / total_pitcher_pitches, 1)
-                        avg_velo  = round(type_grp['RelSpeed'].mean(),          1) if 'RelSpeed'         in type_grp.columns else np.nan
-                        avg_ivb   = round(type_grp['InducedVertBreak'].mean(),  1) if 'InducedVertBreak' in type_grp.columns else np.nan
-                        avg_hb    = round(type_grp['HorzBreak'].mean(),         1) if 'HorzBreak'        in type_grp.columns else np.nan
-                        avg_spin  = round(type_grp['SpinRate'].mean(),          0) if 'SpinRate'         in type_grp.columns else np.nan
+                        n_arsenal   = len(type_grp)
+                        usage_pct   = round(100 * n_arsenal / total_pitcher_pitches, 1)
+                        avg_velo    = round(type_grp['RelSpeed'].mean(),         1) if 'RelSpeed'         in type_grp.columns else np.nan
+                        avg_ivb     = round(type_grp['InducedVertBreak'].mean(), 1) if 'InducedVertBreak' in type_grp.columns else np.nan
+                        avg_hb      = round(type_grp['HorzBreak'].mean(),        1) if 'HorzBreak'        in type_grp.columns else np.nan
+                        avg_spin    = round(type_grp['SpinRate'].mean(),         0) if 'SpinRate'         in type_grp.columns else np.nan
 
                         def pitch_type_row(grp, batter_label):
-                            """
-                            Hitter performance stats from full_df similarity-matched pitches.
-                            Uses TaggedPitchType + MinDistToPitcher filter — same logic
-                            as matchup scoring, but at pitch-type granularity instead of
-                            broad PitchGroup level.
-                            """
                             n = len(grp)
                             if n == 0:
                                 return None
@@ -1309,8 +1313,6 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                                 'InPlay':          len(bip),
                             }
 
-                        # Per-hitter rows — use full_df filtered by TaggedPitchType
-                        # + MinDistToPitcher, NOT pitcher_rows filtered by Batter
                         for hitter in selected_hitters:
                             slice_h = full_df[
                                 (full_df['Batter'] == hitter) &
@@ -1321,7 +1323,6 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                             if row:
                                 all_type_breakdowns.append(row)
 
-                        # "All" aggregate — pool all selected hitters
                         slice_all = full_df[
                             full_df['Batter'].isin(selected_hitters) &
                             (full_df['TaggedPitchType'] == pitch_type) &
@@ -1341,7 +1342,6 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
     combined_summary   = pd.concat(all_summaries, ignore_index=True) if all_summaries       else pd.DataFrame()
     combined_breakdown = pd.DataFrame(all_type_breakdowns)           if all_type_breakdowns else pd.DataFrame()
 
-    # Sort: Pitcher → PitchType → individual hitters alphabetically → All last
     if not combined_breakdown.empty:
         combined_breakdown['_sort'] = combined_breakdown['Batter'].apply(
             lambda x: 'ZZZZ' if x == 'All' else x
@@ -1353,14 +1353,67 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
             .reset_index(drop=True)
         )
 
+    # ── Build Matchup Matrix sheet ─────────────────────────────────────────────
+    matchup_matrix = pd.DataFrame()
+    if not combined_breakdown.empty and not combined_summary.empty:
+        bd = combined_breakdown[combined_breakdown['Batter'] != 'All'].copy()
+        bd['Abbrev'] = bd['TaggedPitchType'].map(PITCH_ABBREV)
+
+        # Re-aggregate using raw RV so merged pitch types (e.g. Four-Seam +
+        # FourSeamFastBall → FB) produce a correct combined RV/100
+        bd['RV_raw'] = bd.apply(
+            lambda r: r['RV/100'] * r['Count'] / 100
+            if pd.notna(r['RV/100']) and pd.notna(r['Count']) else np.nan, axis=1
+        )
+        agg = (
+            bd.groupby(['Pitcher', 'Batter', 'Abbrev'])
+            .agg(Count=('Count', 'sum'), RV_raw=('RV_raw', 'sum'))
+            .reset_index()
+        )
+        agg['RV/100'] = agg.apply(
+            lambda r: round(r['RV_raw'] / r['Count'] * 100, 2)
+            if r['Count'] > 0 and pd.notna(r['RV_raw']) else np.nan, axis=1
+        )
+
+        overall = (
+            combined_summary[combined_summary['Batter'] != 'All']
+            [['Pitcher', 'Batter', 'RV/100', 'Pitches']]
+            .rename(columns={'RV/100': 'Overall_RV', 'Pitches': 'Overall_P'})
+        )
+
+        matrix_rows = []
+        for _, ov in overall.iterrows():
+            pitcher = ov['Pitcher']
+            batter  = ov['Batter']
+            row     = {
+                'Pitcher': pitcher,
+                'Batter':  batter,
+                'RV/100':  ov['Overall_RV'],
+                'P':       int(ov['Overall_P']) if pd.notna(ov['Overall_P']) else np.nan,
+            }
+            for abbrev in PITCH_ORDER:
+                match = agg[
+                    (agg['Pitcher'] == pitcher) &
+                    (agg['Batter']  == batter)  &
+                    (agg['Abbrev']  == abbrev)
+                ]
+                row[f'{abbrev} RV/100'] = match['RV/100'].values[0] if not match.empty else np.nan
+                row[f'{abbrev} P']      = int(match['Count'].values[0]) if not match.empty and pd.notna(match['Count'].values[0]) else np.nan
+            matrix_rows.append(row)
+
+        matchup_matrix = pd.DataFrame(matrix_rows)
+
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not combined_summary.empty:
             combined_summary.to_excel(writer, sheet_name='Hot Arms Summary', index=False)
         if not combined_breakdown.empty:
             combined_breakdown.to_excel(writer, sheet_name='Pitch Type Breakdown', index=False)
+        if not matchup_matrix.empty:
+            matchup_matrix.to_excel(writer, sheet_name='Matchup Matrix', index=False)
 
         wb = writer.book
 
+        # ── Conditional formatting: Sheet 1 & 2 ──────────────────────────────
         sheet_df_pairs = []
         if not combined_summary.empty   and 'Hot Arms Summary'    in wb.sheetnames:
             sheet_df_pairs.append(('Hot Arms Summary',    combined_summary))
@@ -1393,6 +1446,34 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                         end_type='max',   end_color='63BE7B',
                     )
                 )
+
+        # ── Conditional formatting + bold/italic: Matchup Matrix ─────────────
+        if not matchup_matrix.empty and 'Matchup Matrix' in wb.sheetnames:
+            ws        = wb['Matchup Matrix']
+            mm_cols   = list(matchup_matrix.columns)
+            n_rows_mm = len(matchup_matrix) + 1
+
+            all_rv_cols = ['RV/100'] + [f'{a} RV/100' for a in PITCH_ORDER]
+            for col_name in all_rv_cols:
+                if col_name not in mm_cols:
+                    continue
+                cl = ws.cell(row=1, column=mm_cols.index(col_name) + 1).column_letter
+                # Fixed -10 / 0 / +10 so outliers don't skew the color scale
+                ws.conditional_formatting.add(
+                    f"{cl}2:{cl}{n_rows_mm}",
+                    ColorScaleRule(
+                        start_type='num', start_value=-10, start_color='63BE7B',
+                        mid_type='num',   mid_value=0,     mid_color='FFEB84',
+                        end_type='num',   end_value=10,    end_color='F8696B',
+                    )
+                )
+
+            # Bold + italic on entire overall RV/100 column (header + data cells)
+            if 'RV/100' in mm_cols:
+                rv100_col_idx = mm_cols.index('RV/100') + 1
+                for row_num in range(1, n_rows_mm + 1):
+                    cell      = ws.cell(row=row_num, column=rv100_col_idx)
+                    cell.font = Font(bold=True, italic=True)
 
     output.seek(0)
     return output.getvalue()
