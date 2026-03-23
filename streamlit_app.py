@@ -1348,21 +1348,21 @@ def main():
     DEFAULT_CONFIG = {
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
+
+            "Teel, Aidan",
+            "Reese, Ace",
+            "Sullivan, Noah",
+            "Frei, Gehrig",
+            "Stallman, Reed",
+            "Woodson, Ryder",
+            "Nunnallee, James",
+            "Parker, Jacob",
+            "Wyers, Drew",
+            "Raymond, Andrew",
+            "Milewski, Kevin",
+            "Valincius, Vytas",
+            "James, Chone"
             
-            "Tharnish, Jayce",
-            "Lawrence, Luke",
-            "Hindle, Ethan",
-            "Bell, Tyler",
-            "Brown, Hudson",
-            "Campbell, Scott", 
-            "Cloud, Caeden",
-            "Schwartz, Ryan",
-            "Cerny, Tyler",
-            "Jenkinks, Owen",
-            "Hansen, Carson",
-            "Tyson, Tagger",
-            "Marcy, Will",
-            "Duffey, Alex"
             
             
 
