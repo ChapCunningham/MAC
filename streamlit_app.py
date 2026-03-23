@@ -1202,17 +1202,16 @@ def create_optimal_usage_recommendations(matchups_df, pitcher_summaries):
 ########### NEW BULLPEN EXPORT FUNCTION ###########
 
 def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
-    """
-    2-sheet Excel export:
-      Sheet 1 - Hot Arms Summary:        per pitcher-hitter + Batter='All' aggregate
-      Sheet 2 - Pitch Type Breakdown:    per pitcher-TaggedPitchType-batter + Batter='All'
-    Conditional formatting applied:
-      RV/100  -> green (low/negative) -> yellow (0) -> red (high/positive)
-      Count   -> white (low) -> green (high)
-    """
     from openpyxl.formatting.rule import ColorScaleRule
 
-    output = BytesIO()
+    autopitchtype_to_group = {
+        'Four-Seam': 'Fastball', 'Fastball': 'Fastball', 'FourSeamFastBall': 'Fastball',
+        'TwoSeamFastBall': 'Fastball', 'Sinker': 'Fastball', 'Slider': 'Breaking',
+        'Cutter': 'Breaking', 'Curveball': 'Breaking', 'Sweeper': 'Breaking',
+        'Changeup': 'Offspeed', 'Splitter': 'Offspeed', 'ChangeUp': 'Offspeed'
+    }
+
+    output              = BytesIO()
     all_summaries       = []
     all_type_breakdowns = []
 
@@ -1233,9 +1232,6 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                 s = summary_df.copy()
                 s.insert(0, 'Pitcher', pitcher)
 
-                pitches_total = s['Pitches'].sum()
-                bips_total    = s['InPlay'].sum()
-
                 def wavg(col, weight_col):
                     mask = s[col].notna() & s[weight_col].notna()
                     w    = s.loc[mask, weight_col].sum()
@@ -1244,25 +1240,25 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                     return round((s.loc[mask, col] * s.loc[mask, weight_col]).sum() / w, 3)
 
                 all_row = {
-                    'Pitcher':  pitcher,
-                    'Batter':   'All',
-                    'RV/100':   wavg('RV/100',   'Pitches'),
-                    'AVG':      wavg('AVG',       'Pitches'),
-                    'Whiff%':   wavg('Whiff%',    'Pitches'),
-                    'SwStr%':   wavg('SwStr%',    'Pitches'),
-                    'HH%':      wavg('HH%',       'InPlay'),
-                    'GB%':      wavg('GB%',       'InPlay'),
-                    'ExitVelo': wavg('ExitVelo',  'InPlay'),
-                    'Launch':   wavg('Launch',    'InPlay'),
-                    'wOBA':     wavg('wOBA',      'Pitches'),
-                    'Pitches':  pitches_total,
-                    'InPlay':   bips_total,
+                    'Pitcher':  pitcher,   'Batter':   'All',
+                    'RV/100':   wavg('RV/100',  'Pitches'),
+                    'AVG':      wavg('AVG',      'Pitches'),
+                    'Whiff%':   wavg('Whiff%',   'Pitches'),
+                    'SwStr%':   wavg('SwStr%',   'Pitches'),
+                    'HH%':      wavg('HH%',      'InPlay'),
+                    'GB%':      wavg('GB%',      'InPlay'),
+                    'ExitVelo': wavg('ExitVelo', 'InPlay'),
+                    'Launch':   wavg('Launch',   'InPlay'),
+                    'wOBA':     wavg('wOBA',     'Pitches'),
+                    'Pitches':  s['Pitches'].sum(),
+                    'InPlay':   s['InPlay'].sum(),
                 }
                 s = pd.concat([s, pd.DataFrame([all_row])], ignore_index=True)
                 all_summaries.append(s)
 
-            # ── Sheet 2: per pitcher + TaggedPitchType + batter ───────────────
+            # ── Sheet 2: per pitcher + TaggedPitchType + batter ──────────────
             if full_df is not None and not full_df.empty:
+                # Pitcher's OWN pitches - for arsenal characteristics only
                 pitcher_rows = full_df[full_df['Pitcher'] == pitcher].copy()
 
                 if not pitcher_rows.empty and 'TaggedPitchType' in pitcher_rows.columns:
@@ -1270,16 +1266,24 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                     total_pitcher_pitches = len(pitcher_rows)
 
                     for pitch_type, type_grp in pitcher_rows.groupby('TaggedPitchType'):
-                        pitch_group  = type_grp['PitchGroup'].mode()[0] if 'PitchGroup' in type_grp.columns else np.nan
-                        usage_pct    = round(100 * len(type_grp) / total_pitcher_pitches, 1)
-                        avg_velo     = round(type_grp['RelSpeed'].mean(),           1) if 'RelSpeed'          in type_grp.columns else np.nan
-                        avg_ivb      = round(type_grp['InducedVertBreak'].mean(),   1) if 'InducedVertBreak'  in type_grp.columns else np.nan
-                        avg_hb       = round(type_grp['HorzBreak'].mean(),          1) if 'HorzBreak'         in type_grp.columns else np.nan
-                        avg_spin     = round(type_grp['SpinRate'].mean(),           0) if 'SpinRate'          in type_grp.columns else np.nan
+                        pitch_group = autopitchtype_to_group.get(pitch_type, 'Unknown')
 
-                        def pitch_type_stats(grp, batter_label):
-                            """Compute all stats for a slice of pitches."""
-                            n      = len(grp)
+                        # Arsenal characteristics from pitcher's own pitches
+                        n_arsenal = len(type_grp)
+                        usage_pct = round(100 * n_arsenal / total_pitcher_pitches, 1)
+                        avg_velo  = round(type_grp['RelSpeed'].mean(),          1) if 'RelSpeed'         in type_grp.columns else np.nan
+                        avg_ivb   = round(type_grp['InducedVertBreak'].mean(),  1) if 'InducedVertBreak' in type_grp.columns else np.nan
+                        avg_hb    = round(type_grp['HorzBreak'].mean(),         1) if 'HorzBreak'        in type_grp.columns else np.nan
+                        avg_spin  = round(type_grp['SpinRate'].mean(),          0) if 'SpinRate'         in type_grp.columns else np.nan
+
+                        def pitch_type_row(grp, batter_label):
+                            """
+                            Hitter performance stats from full_df similarity-matched pitches.
+                            Uses TaggedPitchType + MinDistToPitcher filter — same logic
+                            as matchup scoring, but at pitch-type granularity instead of
+                            broad PitchGroup level.
+                            """
+                            n = len(grp)
                             if n == 0:
                                 return None
                             swings = grp['PitchCall'].isin(swing_calls).sum()
@@ -1288,39 +1292,42 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                             hh     = (bip['ExitSpeed'] >= 95).sum() if 'ExitSpeed' in bip.columns else 0
                             rv     = grp['run_value'].sum() if 'run_value' in grp.columns else np.nan
                             return {
-                                'Pitcher':          pitcher,
-                                'TaggedPitchType':  pitch_type,
-                                'PitchGroup':       pitch_group,
-                                'Batter':           batter_label,
-                                'Count':            n,
-                                'Usage%':           usage_pct,
-                                'AvgVelo':          avg_velo,
-                                'AvgIVB':           avg_ivb,
-                                'AvgHB':            avg_hb,
-                                'AvgSpin':          avg_spin,
-                                'RV/100':           round(100 * rv / n, 2) if n > 0 and not pd.isna(rv) else np.nan,
-                                'Whiff%':           round(100 * whiffs / swings, 1) if swings > 0 else np.nan,
-                                'SwStr%':           round(100 * whiffs / n, 1)      if n > 0      else np.nan,
-                                'HH%':              round(100 * hh / len(bip), 1)   if len(bip) > 0 else np.nan,
-                                'InPlay':           len(bip),
+                                'Pitcher':         pitcher,
+                                'TaggedPitchType': pitch_type,
+                                'PitchGroup':      pitch_group,
+                                'Batter':          batter_label,
+                                'Count':           n,
+                                'Usage%':          usage_pct,
+                                'AvgVelo':         avg_velo,
+                                'AvgIVB':          avg_ivb,
+                                'AvgHB':           avg_hb,
+                                'AvgSpin':         avg_spin,
+                                'RV/100':          round(100 * rv / n, 2) if n > 0 and not pd.isna(rv) else np.nan,
+                                'Whiff%':          round(100 * whiffs / swings, 1) if swings > 0 else np.nan,
+                                'SwStr%':          round(100 * whiffs / n,      1) if n      > 0 else np.nan,
+                                'HH%':             round(100 * hh / len(bip),   1) if len(bip) > 0 else np.nan,
+                                'InPlay':          len(bip),
                             }
 
-                        # Individual hitter rows
+                        # Per-hitter rows — use full_df filtered by TaggedPitchType
+                        # + MinDistToPitcher, NOT pitcher_rows filtered by Batter
                         for hitter in selected_hitters:
-                            slice_h = type_grp[
-                                (type_grp['Batter'] == hitter) &
-                                (type_grp['MinDistToPitcher'] <= distance_threshold)
+                            slice_h = full_df[
+                                (full_df['Batter'] == hitter) &
+                                (full_df['TaggedPitchType'] == pitch_type) &
+                                (full_df['MinDistToPitcher'] <= distance_threshold)
                             ]
-                            row = pitch_type_stats(slice_h, hitter)
+                            row = pitch_type_row(slice_h, hitter)
                             if row:
                                 all_type_breakdowns.append(row)
 
-                        # "All" aggregate row — pool all hitters within threshold
-                        slice_all = type_grp[
-                            type_grp['Batter'].isin(selected_hitters) &
-                            (type_grp['MinDistToPitcher'] <= distance_threshold)
+                        # "All" aggregate — pool all selected hitters
+                        slice_all = full_df[
+                            full_df['Batter'].isin(selected_hitters) &
+                            (full_df['TaggedPitchType'] == pitch_type) &
+                            (full_df['MinDistToPitcher'] <= distance_threshold)
                         ]
-                        row_all = pitch_type_stats(slice_all, 'All')
+                        row_all = pitch_type_row(slice_all, 'All')
                         if row_all:
                             all_type_breakdowns.append(row_all)
 
@@ -1331,10 +1338,10 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
     progress_bar.empty()
     status_text.empty()
 
-    combined_summary   = pd.concat(all_summaries, ignore_index=True) if all_summaries   else pd.DataFrame()
+    combined_summary   = pd.concat(all_summaries, ignore_index=True) if all_summaries       else pd.DataFrame()
     combined_breakdown = pd.DataFrame(all_type_breakdowns)           if all_type_breakdowns else pd.DataFrame()
 
-    # Sort breakdown: Pitcher → PitchType → individual hitters → All last
+    # Sort: Pitcher → PitchType → individual hitters alphabetically → All last
     if not combined_breakdown.empty:
         combined_breakdown['_sort'] = combined_breakdown['Batter'].apply(
             lambda x: 'ZZZZ' if x == 'All' else x
@@ -1354,7 +1361,6 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
 
         wb = writer.book
 
-        # Apply conditional formatting to both sheets
         sheet_df_pairs = []
         if not combined_summary.empty   and 'Hot Arms Summary'    in wb.sheetnames:
             sheet_df_pairs.append(('Hot Arms Summary',    combined_summary))
@@ -1362,15 +1368,14 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
             sheet_df_pairs.append(('Pitch Type Breakdown', combined_breakdown))
 
         for sheet_name, df in sheet_df_pairs:
-            ws      = wb[sheet_name]
-            cols    = list(df.columns)
-            n_rows  = len(df) + 1  # +1 for header row
+            ws     = wb[sheet_name]
+            cols   = list(df.columns)
+            n_rows = len(df) + 1
 
-            # RV/100: green (low) → yellow (0) → red (high)
             if 'RV/100' in cols:
-                col_letter = ws.cell(row=1, column=cols.index('RV/100') + 1).column_letter
+                cl = ws.cell(row=1, column=cols.index('RV/100') + 1).column_letter
                 ws.conditional_formatting.add(
-                    f"{col_letter}2:{col_letter}{n_rows}",
+                    f"{cl}2:{cl}{n_rows}",
                     ColorScaleRule(
                         start_type='min', start_color='63BE7B',
                         mid_type='num',   mid_value=0,  mid_color='FFEB84',
@@ -1378,12 +1383,11 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
                     )
                 )
 
-            # Count / Pitches: white (low sample) → green (high sample)
             count_col = next((c for c in ['Count', 'Pitches'] if c in cols), None)
             if count_col:
-                col_letter = ws.cell(row=1, column=cols.index(count_col) + 1).column_letter
+                cl = ws.cell(row=1, column=cols.index(count_col) + 1).column_letter
                 ws.conditional_formatting.add(
-                    f"{col_letter}2:{col_letter}{n_rows}",
+                    f"{cl}2:{cl}{n_rows}",
                     ColorScaleRule(
                         start_type='min', start_color='FFFFFF',
                         end_type='max',   end_color='63BE7B',
