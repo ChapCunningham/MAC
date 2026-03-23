@@ -1203,27 +1203,14 @@ def create_optimal_usage_recommendations(matchups_df, pitcher_summaries):
 
 def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
     """
-    Generate a multi-sheet Excel export for all hot arms containing:
-      - Sheet 1: Hot Arms Summary       (one row per pitcher-hitter pair, all MAC metrics)
-      - Sheet 2: Pitch Group Breakdown  (Fastball / Breaking / Offspeed split per pitcher)
-      - Sheet 3: Pitch by Pitch         (every individual pitch thrown by each hot arm)
+    Generate a 2-sheet Excel export for all hot arms:
+      - Sheet 1: Hot Arms Summary       (one row per pitcher-hitter pair + an 'All' aggregate row)
+      - Sheet 2: Pitch Type Breakdown   (per-pitcher TaggedPitchType stats vs these hitters)
     """
     output = BytesIO()
 
     all_summaries  = []
-    all_breakdowns = []
-    all_pitches    = []
-
-    # Columns we want to surface in the pitch-level sheet (keep whatever exists)
-    PITCH_COLS = [
-        'Pitcher', 'Batter', 'TaggedPitchType', 'PitchGroup', 'PitchCluster',
-        'RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate',
-        'RelHeight', 'RelSide',
-        'PitchCall', 'PlayResult', 'KorBB',
-        'ExitSpeed', 'Angle',
-        'PlateLocHeight', 'PlateLocSide',
-        'run_value', 'wOBA_result', 'MinDistToPitcher',
-    ]
+    all_type_breakdowns = []
 
     progress_bar = st.progress(0)
     status_text  = st.empty()
@@ -1233,30 +1220,90 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
         status_text.text(f"Collecting data for {pitcher} ({i + 1}/{len(hot_arms)})")
 
         try:
-            summary_df, breakdown_df, full_df = run_silent_mac_analysis(
+            summary_df, _, full_df = run_silent_mac_analysis(
                 pitcher, selected_hitters, db_manager
             )
 
-            # --- Summary sheet ---
+            # ── Sheet 1: Summary rows ──────────────────────────────────────────
             if summary_df is not None and not summary_df.empty:
                 s = summary_df.copy()
                 s.insert(0, 'Pitcher', pitcher)
+
+                # Build a weighted "All hitters" aggregate row
+                pitches_total = s['Pitches'].sum()
+                bips_total    = s['InPlay'].sum()
+
+                def wavg_pitches(col):
+                    """Weighted average using Pitches as weight, ignoring NaN rows."""
+                    mask = s[col].notna() & s['Pitches'].notna()
+                    if mask.sum() == 0 or s.loc[mask, 'Pitches'].sum() == 0:
+                        return np.nan
+                    return round(
+                        (s.loc[mask, col] * s.loc[mask, 'Pitches']).sum()
+                        / s.loc[mask, 'Pitches'].sum(), 3
+                    )
+
+                def wavg_bips(col):
+                    """Weighted average using InPlay as weight, ignoring NaN rows."""
+                    mask = s[col].notna() & s['InPlay'].notna()
+                    if mask.sum() == 0 or s.loc[mask, 'InPlay'].sum() == 0:
+                        return np.nan
+                    return round(
+                        (s.loc[mask, col] * s.loc[mask, 'InPlay']).sum()
+                        / s.loc[mask, 'InPlay'].sum(), 3
+                    )
+
+                all_row = {
+                    'Pitcher':  pitcher,
+                    'Batter':   'All',
+                    'RV/100':   wavg_pitches('RV/100'),
+                    'AVG':      wavg_pitches('AVG'),
+                    'Whiff%':   wavg_pitches('Whiff%'),
+                    'SwStr%':   wavg_pitches('SwStr%'),
+                    'HH%':      wavg_bips('HH%'),
+                    'GB%':      wavg_bips('GB%'),
+                    'ExitVelo': wavg_bips('ExitVelo'),
+                    'Launch':   wavg_bips('Launch'),
+                    'wOBA':     wavg_pitches('wOBA'),
+                    'Pitches':  pitches_total,
+                    'InPlay':   bips_total,
+                }
+
+                s = pd.concat([s, pd.DataFrame([all_row])], ignore_index=True)
                 all_summaries.append(s)
 
-            # --- Pitch-group breakdown sheet ---
-            if breakdown_df is not None and not breakdown_df.empty:
-                b = breakdown_df.copy()
-                # 'Batter' is already a column; add Pitcher at front
-                if 'Pitcher' not in b.columns:
-                    b.insert(0, 'Pitcher', pitcher)
-                all_breakdowns.append(b)
-
-            # --- Pitch-by-pitch sheet (pitcher's own pitches only) ---
+            # ── Sheet 2: TaggedPitchType breakdown ────────────────────────────
             if full_df is not None and not full_df.empty:
                 pitcher_rows = full_df[full_df['Pitcher'] == pitcher].copy()
-                if not pitcher_rows.empty:
-                    cols = [c for c in PITCH_COLS if c in pitcher_rows.columns]
-                    all_pitches.append(pitcher_rows[cols])
+
+                if not pitcher_rows.empty and 'TaggedPitchType' in pitcher_rows.columns:
+                    pitcher_rows['TaggedPitchType'] = pitcher_rows['TaggedPitchType'].fillna('Unknown')
+                    total_pitches = len(pitcher_rows)
+
+                    for pitch_type, grp in pitcher_rows.groupby('TaggedPitchType'):
+                        swings = grp['PitchCall'].isin(swing_calls).sum()
+                        whiffs = (grp['PitchCall'] == 'StrikeSwinging').sum()
+                        n      = len(grp)
+
+                        bip    = grp[grp['PitchCall'] == 'InPlay']
+                        hh     = (bip['ExitSpeed'] >= 95).sum() if 'ExitSpeed' in bip.columns else np.nan
+                        hh_pct = round(100 * hh / len(bip), 1) if len(bip) > 0 else np.nan
+
+                        all_type_breakdowns.append({
+                            'Pitcher':        pitcher,
+                            'TaggedPitchType': pitch_type,
+                            'PitchGroup':     grp['PitchGroup'].mode()[0] if 'PitchGroup' in grp.columns and not grp.empty else np.nan,
+                            'Count':          n,
+                            'Usage%':         round(100 * n / total_pitches, 1),
+                            'AvgVelo':        round(grp['RelSpeed'].mean(), 1) if 'RelSpeed' in grp.columns else np.nan,
+                            'AvgIVB':         round(grp['InducedVertBreak'].mean(), 1) if 'InducedVertBreak' in grp.columns else np.nan,
+                            'AvgHB':          round(grp['HorzBreak'].mean(), 1) if 'HorzBreak' in grp.columns else np.nan,
+                            'AvgSpin':        round(grp['SpinRate'].mean(), 0) if 'SpinRate' in grp.columns else np.nan,
+                            'Whiff%':         round(100 * whiffs / swings, 1) if swings > 0 else np.nan,
+                            'SwStr%':         round(100 * whiffs / n, 1) if n > 0 else np.nan,
+                            'HH%':            hh_pct,
+                            'InPlay':         len(bip),
+                        })
 
         except Exception as e:
             st.warning(f"Skipping {pitcher} in export: {e}")
@@ -1265,17 +1312,14 @@ def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
     progress_bar.empty()
     status_text.empty()
 
-    combined_summary   = pd.concat(all_summaries,  ignore_index=True) if all_summaries  else pd.DataFrame()
-    combined_breakdown = pd.concat(all_breakdowns, ignore_index=True) if all_breakdowns else pd.DataFrame()
-    combined_pitches   = pd.concat(all_pitches,    ignore_index=True) if all_pitches    else pd.DataFrame()
+    combined_summary   = pd.concat(all_summaries, ignore_index=True) if all_summaries else pd.DataFrame()
+    combined_breakdown = pd.DataFrame(all_type_breakdowns) if all_type_breakdowns else pd.DataFrame()
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not combined_summary.empty:
             combined_summary.to_excel(writer, sheet_name='Hot Arms Summary', index=False)
         if not combined_breakdown.empty:
-            combined_breakdown.to_excel(writer, sheet_name='Pitch Group Breakdown', index=False)
-        if not combined_pitches.empty:
-            combined_pitches.to_excel(writer, sheet_name='Pitch by Pitch', index=False)
+            combined_breakdown.to_excel(writer, sheet_name='Pitch Type Breakdown', index=False)
 
     output.seek(0)
     return output.getvalue()
