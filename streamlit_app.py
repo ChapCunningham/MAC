@@ -1198,6 +1198,90 @@ def create_optimal_usage_recommendations(matchups_df, pitcher_summaries):
 
     return recommendations
 
+
+########### NEW BULLPEN EXPORT FUNCTION ###########
+
+def generate_hot_arms_export(hot_arms, selected_hitters, db_manager):
+    """
+    Generate a multi-sheet Excel export for all hot arms containing:
+      - Sheet 1: Hot Arms Summary       (one row per pitcher-hitter pair, all MAC metrics)
+      - Sheet 2: Pitch Group Breakdown  (Fastball / Breaking / Offspeed split per pitcher)
+      - Sheet 3: Pitch by Pitch         (every individual pitch thrown by each hot arm)
+    """
+    output = BytesIO()
+
+    all_summaries  = []
+    all_breakdowns = []
+    all_pitches    = []
+
+    # Columns we want to surface in the pitch-level sheet (keep whatever exists)
+    PITCH_COLS = [
+        'Pitcher', 'Batter', 'TaggedPitchType', 'PitchGroup', 'PitchCluster',
+        'RelSpeed', 'InducedVertBreak', 'HorzBreak', 'SpinRate',
+        'RelHeight', 'RelSide',
+        'PitchCall', 'PlayResult', 'KorBB',
+        'ExitSpeed', 'Angle',
+        'PlateLocHeight', 'PlateLocSide',
+        'run_value', 'wOBA_result', 'MinDistToPitcher',
+    ]
+
+    progress_bar = st.progress(0)
+    status_text  = st.empty()
+
+    for i, pitcher in enumerate(hot_arms):
+        progress_bar.progress((i + 1) / len(hot_arms))
+        status_text.text(f"Collecting data for {pitcher} ({i + 1}/{len(hot_arms)})")
+
+        try:
+            summary_df, breakdown_df, full_df = run_silent_mac_analysis(
+                pitcher, selected_hitters, db_manager
+            )
+
+            # --- Summary sheet ---
+            if summary_df is not None and not summary_df.empty:
+                s = summary_df.copy()
+                s.insert(0, 'Pitcher', pitcher)
+                all_summaries.append(s)
+
+            # --- Pitch-group breakdown sheet ---
+            if breakdown_df is not None and not breakdown_df.empty:
+                b = breakdown_df.copy()
+                # 'Batter' is already a column; add Pitcher at front
+                if 'Pitcher' not in b.columns:
+                    b.insert(0, 'Pitcher', pitcher)
+                all_breakdowns.append(b)
+
+            # --- Pitch-by-pitch sheet (pitcher's own pitches only) ---
+            if full_df is not None and not full_df.empty:
+                pitcher_rows = full_df[full_df['Pitcher'] == pitcher].copy()
+                if not pitcher_rows.empty:
+                    cols = [c for c in PITCH_COLS if c in pitcher_rows.columns]
+                    all_pitches.append(pitcher_rows[cols])
+
+        except Exception as e:
+            st.warning(f"Skipping {pitcher} in export: {e}")
+            continue
+
+    progress_bar.empty()
+    status_text.empty()
+
+    combined_summary   = pd.concat(all_summaries,  ignore_index=True) if all_summaries  else pd.DataFrame()
+    combined_breakdown = pd.concat(all_breakdowns, ignore_index=True) if all_breakdowns else pd.DataFrame()
+    combined_pitches   = pd.concat(all_pitches,    ignore_index=True) if all_pitches    else pd.DataFrame()
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        if not combined_summary.empty:
+            combined_summary.to_excel(writer, sheet_name='Hot Arms Summary', index=False)
+        if not combined_breakdown.empty:
+            combined_breakdown.to_excel(writer, sheet_name='Pitch Group Breakdown', index=False)
+        if not combined_pitches.empty:
+            combined_pitches.to_excel(writer, sheet_name='Pitch by Pitch', index=False)
+
+    output.seek(0)
+    return output.getvalue()
+
+########### NEW BULLPEN EXPORT FUNCTION ###########
+
 # Initialize database manager
 @st.cache_resource
 def get_database_manager():
@@ -1581,6 +1665,33 @@ def main():
         if summary_data:
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, use_container_width=True, hide_index=True)
+           
+            ########### NEW BULLPEN EXPORT FUNCTION ###########
+            # ── Export Hot Arms Arsenal Analysis ──────────────────────────────────
+            st.markdown("---")
+            st.subheader("Export Hot Arms Arsenal Analysis")
+            st.write(
+                "Downloads a 3-sheet Excel file: **Hot Arms Summary** (all MAC metrics per "
+                "pitcher-hitter pair), **Pitch Group Breakdown** (Fastball / Breaking / Offspeed "
+                "splits), and **Pitch by Pitch** (every individual pitch from each hot arm)."
+            )
+    
+            if st.button("📊 Generate Hot Arms Arsenal Export", type="secondary", key="generate_export"):
+                with st.spinner("Building export — this reruns each pitcher's analysis..."):
+                    excel_bytes = generate_hot_arms_export(
+                        hot_arms,
+                        st.session_state.selected_hitters,
+                        db_manager,
+                    )
+                st.download_button(
+                    label="⬇️ Download Hot Arms Arsenal Analysis (.xlsx)",
+                    data=excel_bytes,
+                    file_name="hot_arms_arsenal_analysis.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_export",
+                )
+                ########### NEW BULLPEN EXPORT FUNCTION ###########
+
 
 if __name__ == "__main__":
     main()
