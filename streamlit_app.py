@@ -1503,20 +1503,20 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
 
-            "Jones, Kyle",
-            "Lawson, Brendan",
-            "Surowiec, Ethan",
-            "Bowen, Karson",
-            "Cyr, Blake",
-            "Kurland, Cade",
-            "Stanford, Cole",
-            "Schwarz, Colton",
-            "Kendall, Jacob",
-            "Myers, Kolt",
-            "Miller, Sam",
-            "Wilson, Ashton",
-            "Yost, Hayden",
-            "Stripling, Landon"
+            "Milam, Steven",
+            "Brown, Jake",
+            "Serna, Omar",
+            "Curiel, Derek",
+            "Arrambide, Cade",
+            "Stanfield, Chris",
+            "Dardar, Seth",
+            "Yorke, Zach",
+            "Pearson, Josh",
+            "Caraway, Trent",
+            "Braun, Mason",
+            "Yamin, Eddie",
+            "Reaves, Tanner",
+            "Simpson, Brayden"
             
             
 
