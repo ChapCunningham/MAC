@@ -1514,7 +1514,7 @@ def main():
             "Pearson, Josh",
             "Caraway, Trent",
             "Braun, Mason",
-            "Yamin, Eddie",
+            "Yamin, Edward",
             "Reaves, Tanner",
             "Simpson, Brayden"
             
