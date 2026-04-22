@@ -1505,17 +1505,17 @@ def main():
 
             "Phelps, Tre",
             "Jackson, Daniel",
-            "Lujo, Ryan",
+            "Lujo, Rylan",
             "O'Shaughnessy, Michael",
             "Allen, Henry",
             "Wynn, Ryan",
             "Branch, Kolby",
-            "Black, Ryan",
-            "Oriach, Joey",
+            "Black Jr., Ryan",
+            "Oriach, Jordy",
             "Hudson, Brennan",
             "Arcamone, Jack",
             "Calloway, Bryce",
-            "Ishakawa, Kenny",
+            "Ishikawa, Kenny",
             "Johnson, Cole"
             
             
