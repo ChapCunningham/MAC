@@ -1503,18 +1503,20 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
 
-            "Wright, Garrett",
-            "Chapman, Reese",
-            "Ford, Henry",
-            "Grimmer, Blake",
-            "Grindlinger, Trent",
-            "Brown, Blaine",
-            "Marin, Manny",
-            "Clark, Levi",
-            "Abernathy, Jay",
-            "Myatt, Tyler",
-            "Antigua, Ariel",
-            "Newstrom, Chris"
+            "Phelps, Tre",
+            "Jackson, Daniel",
+            "Lujo, Ryan",
+            "O'Shaughnessy, Michael",
+            "Allen, Henry",
+            "Wynn, Ryan",
+            "Branch, Kolby",
+            "Black, Ryan",
+            "Oriach, Joey",
+            "Hudson, Brennan",
+            "Arcamone, Jack",
+            "Calloway, Bryce",
+            "Ishakawa, Kenny",
+            "Johnson, Cole"
             
             
 
