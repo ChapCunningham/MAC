@@ -1503,20 +1503,18 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
 
-            "Phelps, Tre",
-            "Jackson, Daniel",
-            "Lujo, Rylan",
-            "O'Shaughnessy, Michael",
-            "Allen, Henry",
-            "Wynn, Ryan",
-            "Branch, Kolby",
-            "Black Jr., Ryan",
-            "Oriach, Jordy",
-            "Hudson, Brennan",
-            "Arcamone, Jack",
-            "Calloway, Bryce",
-            "Ishikawa, Kenny",
-            "Johnson, Cole"
+            "Rutenbar, Carter",
+            "Helfrick, Ryder",
+            "Kozeal, Camden",
+            "Ruiz, Damian",
+            "Souza, Nolan",
+            "Niu, Maika",
+            "Aloy, Kuhio",
+            "Stewart, Zack",
+            "Pompey, TJ",
+            "Robinett, Reese",
+            "Turner, Christian",
+            "Brumbaugh, Carson"
             
             
 
