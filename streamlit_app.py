@@ -1503,18 +1503,20 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
 
-            "Rutenbar, Carter",
-            "Helfrick, Ryder",
-            "Kozeal, Camden",
-            "Ruiz, Damian",
-            "Souza, Nolan",
-            "Niu, Maika",
-            "Aloy, Kuhio",
-            "Stewart, Zack",
-            "Pompey, TJ",
-            "Robinett, Reese",
-            "Turner, Christian",
-            "Brumbaugh, Carson"
+            "Grahovac, Gavin",
+            "Sorrell, Caden",
+            "Hacopian, Chris",
+            "Duer, Jake",
+            "Partida, Nico",
+            "Kiel II, Terrence",
+            "Wilson, Jorian",
+            "Harrison, Bear",
+            "Kellner, Boston",
+            "Binderup, Blake",
+            "Jordan, Wesley",
+            "Farr, Sawyer",
+            "Chestnut, Travis"
+            
             
             
 
