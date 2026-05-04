@@ -1507,7 +1507,7 @@ def main():
             "Sorrell, Caden",
             "Hacopian, Chris",
             "Duer, Jake",
-            "Partida, Nico",
+            "Partida, Nicholas",
             "Kiel II, Terrence",
             "Wilson, Jorian",
             "Harrison, Bear",
