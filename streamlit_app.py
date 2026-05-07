@@ -1503,19 +1503,17 @@ def main():
         "pitcher": "Elliott, Hunter",  # Change to your preferred default pitcher
         "hitters": [
 
-            "Grahovac, Gavin",
-            "Sorrell, Caden",
-            "Hacopian, Chris",
-            "Duer, Jake",
-            "Partida, Nicholas",
-            "Kiel II, Terrence",
-            "Wilson, Jorian",
-            "Harrison, Bear",
-            "Kellner, Boston",
-            "Binderup, Blake",
-            "Jordan, Wesley",
-            "Farr, Sawyer",
-            "Chestnut, Travis"
+            "Holt, Brennan",
+            "Lebron, Justin",
+            "Neal, Brady",
+            "Fowler, Bryce",
+            "Hines, Eric",
+            "Lemm, Johnny",
+            "Torres, Jason",
+            "Vaughn, Luke",
+            "Steele, Peyton",
+            "Osterhouse, Justin",
+            "Plattner, Will"
             
             
             
